@@ -1,0 +1,6 @@
+{
+  "name": "Open Buddy",
+  "description": "Native Android AI coding assistant and voice automator with multi-provider support, custom models, encrypted storage, and GitHub integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
