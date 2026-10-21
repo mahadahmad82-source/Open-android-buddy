@@ -237,15 +237,6 @@ fun GlassBackground(
     }
 }
 
-// Alias for template compatibility
-@Composable
-fun OpenBuddyTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    content: @Composable () -> Unit
-) {
-    OpenBuddyTheme(darkTheme = darkTheme, content = content)
-}
-
 @Composable
 fun MyApplicationTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
