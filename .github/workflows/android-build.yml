@@ -53,15 +53,10 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Generate debug keystore
-        if: ${{ github.event.inputs.build_type != 'release' }}
-        run: |
-          keytool -genkeypair -v \
-            -keystore debug.keystore \
-            -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US"
+      # No keystore generation here: debug.keystore is committed to the repo so
+      # every CI build is signed with the SAME debug key and new builds install
+      # cleanly over previous ones. (Generating a fresh key per run caused
+      # "The app wasn't installed" signature conflicts on device.)
 
       - name: Decode release keystore
         if: ${{ github.event.inputs.build_type == 'release' }}
