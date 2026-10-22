@@ -29,8 +29,13 @@ class CoreTools(
     private val supabaseRepository: SupabaseRepository,
     private val memoryDao: MemoryDao,
     private val mediaService: MediaGenerationService,
-    /** Supplies (active provider config, api key) for media tools. */
-    private val activeProvider: suspend () -> Pair<AiProviderConfig, String>?
+    /**
+     * Supplies (provider config, api key) for media tools, resolved across ALL
+     * saved providers: video always resolves to a Gemini provider (Veo), image
+     * prefers Gemini and falls back to other image-capable providers — so media
+     * generation works even when a different provider is active for chat.
+     */
+    private val mediaProvider: suspend (forVideo: Boolean) -> Pair<AiProviderConfig, String>?
 ) {
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -253,12 +258,12 @@ class CoreTools(
 
         object : AgentTool {
             override val name = "generate_image"
-            override val description = "Generate an image from a text prompt with the active provider's image model and show it in the chat. Arguments: {\"prompt\": \"...\"}. Use photorealistic prompts when the user asks for photos."
+            override val description = "Generate an image from a text prompt and show it in the chat. The app automatically uses a saved image-capable provider (Gemini preferred) even if another provider is active for chat. Arguments: {\"prompt\": \"...\"}. Use photorealistic prompts when the user asks for photos."
             override suspend fun execute(args: JSONObject): ToolOutcome {
                 val prompt = args.optString("prompt").trim()
                 if (prompt.isBlank()) return ToolOutcome("An image prompt is required.")
-                val provider = activeProvider()
-                    ?: return ToolOutcome("No AI provider is configured, so no image can be generated.")
+                val provider = mediaProvider(false)
+                    ?: return ToolOutcome("No image-capable provider with an API key was found. Tell the user to add a Gemini provider in Settings → AI Providers.")
                 val result = mediaService.generateImage(provider.first, provider.second, prompt)
                 return result.fold(
                     onSuccess = { ToolOutcome("Image generated and shown to the user in the chat.", mediaPath = it.absolutePath, mediaKind = "image") },
@@ -269,14 +274,14 @@ class CoreTools(
 
         object : AgentTool {
             override val name = "generate_video"
-            override val description = "Generate a short vertical video with Google Veo (needs a Gemini provider with Veo access; takes 1-5 minutes). Arguments: {\"prompt\": \"...\"}. Asks the user to approve first because it is slow and uses paid quota."
+            override val description = "Generate a short vertical (9:16) video with Google Veo and show it in the chat. The app automatically uses the user's saved Gemini key for this, even if a different provider is active for chat — you do NOT need the user to switch providers. Takes 1-5 minutes. Arguments: {\"prompt\": \"...\"}. Asks the user to approve first because it is slow and uses paid quota."
             override val requiresApproval = true
             override fun approvalSummary(args: JSONObject) = "Generate video: \"${args.optString("prompt").take(80)}\""
             override suspend fun execute(args: JSONObject): ToolOutcome {
                 val prompt = args.optString("prompt").trim()
                 if (prompt.isBlank()) return ToolOutcome("A video prompt is required.")
-                val provider = activeProvider()
-                    ?: return ToolOutcome("No AI provider is configured, so no video can be generated.")
+                val provider = mediaProvider(true)
+                    ?: return ToolOutcome("No Gemini provider with an API key was found. Tell the user: video generation needs a Gemini key with Veo access — add a Gemini provider in Settings → AI Providers.")
                 val result = mediaService.generateVideo(provider.first, provider.second, prompt)
                 return result.fold(
                     onSuccess = { ToolOutcome("Video generated and shown to the user in the chat.", mediaPath = it.absolutePath, mediaKind = "video") },

@@ -299,6 +299,23 @@ fun main() {
         appSettingDao.setSetting(AppSettingEntity(KEY_ACTIVE_PROVIDER_ID, id))
     }
 
+    /** All saved providers as configs (used by the media tools to find a
+     *  generation-capable key even when another provider is active for chat). */
+    suspend fun getAllProviderConfigs(): List<AiProviderConfig> = withContext(Dispatchers.IO) {
+        providerDao.getAllProvidersList().map { entity ->
+            AiProviderConfig(
+                id = entity.id,
+                name = entity.name,
+                type = ProviderType.fromString(entity.type),
+                modelName = entity.modelName,
+                baseUrl = entity.baseUrl,
+                isDefault = entity.isDefault,
+                hasApiKey = secretStore.hasApiKey(entity.id),
+                createdAt = entity.createdAt
+            )
+        }
+    }
+
     suspend fun getActiveProvider(): AiProviderConfig? = withContext(Dispatchers.IO) {
         val activeId = appSettingDao.getSettingSync(KEY_ACTIVE_PROVIDER_ID)
         val entity = if (activeId != null) {

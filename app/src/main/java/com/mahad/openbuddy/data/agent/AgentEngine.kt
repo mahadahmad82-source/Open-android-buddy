@@ -318,10 +318,33 @@ class AgentEngine(
             supabaseRepository = supabaseRepository,
             memoryDao = memoryDao,
             mediaService = mediaService,
-            activeProvider = {
-                val config = openBuddyRepository.getActiveProvider()
-                val key = config?.let { secretStore.getApiKey(it.id) }
-                if (config != null && !key.isNullOrBlank()) config to key else null
+            mediaProvider = { forVideo ->
+                // Resolve a generation-capable provider across ALL saved
+                // providers, not just the active chat provider: video needs
+                // Gemini (Veo); images prefer Gemini, then any non-Claude
+                // provider with a key.
+                val all = openBuddyRepository.getAllProviderConfigs()
+                val active = openBuddyRepository.getActiveProvider()
+                val ordered = buildList {
+                    if (active != null) add(active)
+                    addAll(all.filter { it.id != active?.id })
+                }
+                val candidates = if (forVideo) {
+                    ordered.filter { it.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI }
+                } else {
+                    ordered
+                        .filter { it.type != com.mahad.openbuddy.domain.model.ProviderType.CLAUDE }
+                        .sortedByDescending { it.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI }
+                }
+                var found: Pair<com.mahad.openbuddy.domain.model.AiProviderConfig, String>? = null
+                for (config in candidates) {
+                    val key = secretStore.getApiKey(config.id)
+                    if (!key.isNullOrBlank()) {
+                        found = config to key
+                        break
+                    }
+                }
+                found
             }
         )
         val tools = mutableListOf<AgentTool>()
@@ -398,6 +421,7 @@ class AgentEngine(
             |
             |RULES:
             |- Only call tools that are listed below. Never invent tool names or arguments.
+            |- You CAN create media: when the user asks for an image or a video, call generate_image / generate_video. Never claim you have no image or video tool, and never send the user to external websites for generation.
             |- When the task is done, reply with a normal final answer and NO tool blocks.
             |- Keep final answers concise and in the user's language style.
             |- Tools marked as approval-gated will be shown to the user first; if a result says the user rejected an action, do not retry it.
