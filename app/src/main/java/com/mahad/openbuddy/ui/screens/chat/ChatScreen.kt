@@ -164,14 +164,18 @@ fun ChatScreen(
         }
     }
 
-    // Permission launcher for RECORD_AUDIO requested on mic tap
-    val audioPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            onStartVoiceListening(voiceLanguage)
-        } else {
-            scope.launch {
+    // Microphone permission is requested through MainActivity (the Compose
+    // RequestPermission launcher crashes on FragmentActivity hosts). We only
+    // react to a result when THIS screen asked for it.
+    var awaitingAudioPermission by remember { mutableStateOf(false) }
+    val latestVoiceLanguage = androidx.compose.runtime.rememberUpdatedState(voiceLanguage)
+    LaunchedEffect(Unit) {
+        com.mahad.openbuddy.ui.PermissionResults.recordAudio.collect { isGranted ->
+            if (!awaitingAudioPermission) return@collect
+            awaitingAudioPermission = false
+            if (isGranted) {
+                onStartVoiceListening(latestVoiceLanguage.value)
+            } else {
                 snackbarHostState.showSnackbar("Microphone permission is required to use voice input.")
             }
         }
@@ -423,7 +427,8 @@ fun ChatScreen(
                         if (hasAudio) {
                             onStartVoiceListening(voiceLanguage)
                         } else {
-                            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            awaitingAudioPermission = true
+                            (context as? com.mahad.openbuddy.MainActivity)?.requestRecordAudioPermission()
                         }
                     }
                 }

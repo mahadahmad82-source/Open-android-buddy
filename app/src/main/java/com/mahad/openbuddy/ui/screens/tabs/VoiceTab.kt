@@ -131,32 +131,38 @@ fun VoiceTab(
     val voiceSettings by viewModel.voiceActionSettings.collectAsStateWithLifecycle()
     val handsFreeActive by viewModel.handsFreeActive.collectAsStateWithLifecycle()
 
-    // Permission launcher for the hands-free conversation loop
-    val handsFreePermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            viewModel.startHandsFree()
-        } else {
-            viewModel.setVoiceError("Microphone permission is required for hands-free conversation.")
-        }
-    }
-
     var typedCommand by remember { mutableStateOf("") }
     var manualRecipientInput by remember { mutableStateOf("") }
     var selectedCategoryFilter by remember { mutableStateOf<String?>(null) }
     var showVoiceInstructions by remember { mutableStateOf(false) }
     var selectedLanguage by remember { mutableStateOf("en-US") } // "en-US" or "ur-PK"
 
-    // Permission launcher for RECORD_AUDIO requested on mic tap
-    val audioPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            viewModel.clearVoiceError()
-            viewModel.startVoiceListening(selectedLanguage)
-        } else {
-            viewModel.setVoiceError("Microphone permission was not granted. Please allow microphone access to use voice dictation, or type your command below.")
+    // Microphone permission goes through MainActivity: the Compose
+    // RequestPermission launcher crashes on this FragmentActivity host
+    // ("Can only use lower 16 bits for requestCode") — that was the Voice
+    // tab crash. pendingPermissionAction remembers WHY we asked.
+    var pendingPermissionAction by remember { mutableStateOf<String?>(null) }
+    val latestSelectedLanguage = androidx.compose.runtime.rememberUpdatedState(selectedLanguage)
+    LaunchedEffect(Unit) {
+        com.mahad.openbuddy.ui.PermissionResults.recordAudio.collect { isGranted ->
+            val action = pendingPermissionAction ?: return@collect
+            pendingPermissionAction = null
+            if (isGranted) {
+                viewModel.clearVoiceError()
+                if (action == "handsfree") {
+                    viewModel.startHandsFree()
+                } else {
+                    viewModel.startVoiceListening(latestSelectedLanguage.value)
+                }
+            } else {
+                viewModel.setVoiceError(
+                    if (action == "handsfree") {
+                        "Microphone permission is required for hands-free conversation."
+                    } else {
+                        "Microphone permission was not granted. Please allow microphone access to use voice dictation, or type your command below."
+                    }
+                )
+            }
         }
     }
 
@@ -354,7 +360,8 @@ fun VoiceTab(
                                 if (hasAudio) {
                                     viewModel.startHandsFree()
                                 } else {
-                                    handsFreePermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                    pendingPermissionAction = "handsfree"
+                                    (context as? com.mahad.openbuddy.MainActivity)?.requestRecordAudioPermission()
                                 }
                             }
                         },
@@ -543,7 +550,10 @@ fun VoiceTab(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(50))
                                 .background(tokens.accentViolet)
-                                .clickable { audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+                                .clickable {
+                                    pendingPermissionAction = "listen"
+                                    (context as? com.mahad.openbuddy.MainActivity)?.requestRecordAudioPermission()
+                                }
                                 .padding(horizontal = 14.dp, vertical = 7.dp)
                                 .testTag("request_mic_permission_button"),
                             contentAlignment = Alignment.Center
@@ -638,7 +648,8 @@ fun VoiceTab(
                                     if (hasAudio) {
                                         viewModel.startVoiceListening(selectedLanguage)
                                     } else {
-                                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                        pendingPermissionAction = "listen"
+                                        (context as? com.mahad.openbuddy.MainActivity)?.requestRecordAudioPermission()
                                     }
                                 }
                             }

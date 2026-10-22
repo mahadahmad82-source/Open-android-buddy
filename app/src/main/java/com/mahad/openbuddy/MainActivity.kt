@@ -1,7 +1,10 @@
 package com.mahad.openbuddy
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
+import androidx.core.app.ActivityCompat
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -21,6 +24,39 @@ import com.mahad.openbuddy.ui.viewmodel.MainViewModel
 class MainActivity : FragmentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
+
+    /**
+     * Requests the microphone permission the classic way, with a small fixed
+     * request code. The Compose ActivityResultLauncher route crashes on
+     * FragmentActivity hosts ("Can only use lower 16 bits for requestCode")
+     * for the RequestPermission contract — this was the Voice tab crash.
+     * Screens observe the outcome via [com.mahad.openbuddy.ui.PermissionResults].
+     */
+    fun requestRecordAudioPermission() {
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.RECORD_AUDIO),
+            REQUEST_RECORD_AUDIO
+        )
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_RECORD_AUDIO) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            com.mahad.openbuddy.ui.PermissionResults.recordAudio.tryEmit(granted)
+        }
+    }
+
+    companion object {
+        const val REQUEST_RECORD_AUDIO = 0x0B01
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
