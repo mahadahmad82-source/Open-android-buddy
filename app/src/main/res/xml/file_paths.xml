@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Agent-generated media (images/videos) shared with viewer apps -->
+    <files-path name="generated_media" path="generated/" />
+</paths>

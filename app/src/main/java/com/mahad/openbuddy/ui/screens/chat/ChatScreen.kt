@@ -109,6 +109,25 @@ fun ChatScreen(
     voiceTranscript: String = "",
     onStartVoiceListening: (languagePreference: String?) -> Unit = {},
     onStopVoiceListening: () -> Unit = {},
+    // Agent mode (Phases 2-7)
+    agentMode: Boolean = false,
+    onToggleAgentMode: (Boolean) -> Unit = {},
+    agentStatusText: String? = null,
+    pendingApproval: com.mahad.openbuddy.data.agent.ToolApprovalRequest? = null,
+    onApprovalDecision: (Boolean) -> Unit = {},
+    skills: List<com.mahad.openbuddy.data.local.entity.SkillEntity> = emptyList(),
+    activeSkillId: String? = null,
+    onSelectSkill: (String?) -> Unit = {},
+    speakReplies: Boolean = false,
+    onToggleSpeakReplies: (Boolean) -> Unit = {},
+    memories: List<com.mahad.openbuddy.data.local.entity.MemoryEntity> = emptyList(),
+    onAddMemory: (String) -> Unit = {},
+    onDeleteMemory: (String) -> Unit = {},
+    onSaveSkill: (String?, String, String, String) -> Unit = { _, _, _, _ -> },
+    onDeleteSkill: (String) -> Unit = {},
+    mcpServers: List<com.mahad.openbuddy.data.local.entity.McpServerEntity> = emptyList(),
+    onAddMcpServer: (String, String, String?) -> Unit = { _, _, _ -> },
+    onDeleteMcpServer: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tokens = GlassTheme.tokens
@@ -119,6 +138,7 @@ fun ChatScreen(
     val clipboardManager = LocalClipboardManager.current
     var inputText by remember { mutableStateOf("") }
     var voiceLanguage by remember { mutableStateOf("en-US") } // "en-US" or "ur-PK"
+    var showAgentHub by remember { mutableStateOf(false) }
 
     // Sync live voice transcript into input text field
     LaunchedEffect(voiceTranscript) {
@@ -251,6 +271,36 @@ fun ChatScreen(
                 }
             }
 
+            // Tool approval card (agent mode) — Approve / Reject gates world-changing tools
+            if (pendingApproval != null) {
+                ToolApprovalCard(
+                    request = pendingApproval,
+                    onDecision = onApprovalDecision
+                )
+            }
+
+            // Live agent status line
+            if (agentMode && agentStatusText != null) {
+                Text(
+                    text = agentStatusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                )
+            }
+
+            // Agent toolbar: mode toggle, skill picker, speak toggle, hub
+            AgentToolbar(
+                agentMode = agentMode,
+                onToggleAgentMode = onToggleAgentMode,
+                skills = skills,
+                activeSkillId = activeSkillId,
+                onSelectSkill = onSelectSkill,
+                speakReplies = speakReplies,
+                onToggleSpeakReplies = onToggleSpeakReplies,
+                onOpenHub = { showAgentHub = true }
+            )
+
             // Floating Glass Input Bar with Mic Button
             FloatingGlassInputBar(
                 inputText = inputText,
@@ -298,6 +348,24 @@ fun ChatScreen(
                 .padding(bottom = 84.dp)
         ) { snackbarData ->
             GlassSnackbar(snackbarData = snackbarData)
+        }
+
+        // Agent hub: skills, memory, MCP servers
+        if (showAgentHub) {
+            AgentHubDialog(
+                skills = skills,
+                activeSkillId = activeSkillId,
+                onSelectSkill = onSelectSkill,
+                onSaveSkill = onSaveSkill,
+                onDeleteSkill = onDeleteSkill,
+                memories = memories,
+                onAddMemory = onAddMemory,
+                onDeleteMemory = onDeleteMemory,
+                mcpServers = mcpServers,
+                onAddMcpServer = onAddMcpServer,
+                onDeleteMcpServer = onDeleteMcpServer,
+                onDismiss = { showAgentHub = false }
+            )
         }
     }
 }
@@ -389,13 +457,22 @@ private fun MessageBubbleItem(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Markdown content
+                    // Markdown content (+ generated media rendered from markers)
                     if (message.content.isNotEmpty()) {
-                        MarkdownText(
-                            markdown = message.content,
-                            textColor = tokens.textPrimary,
-                            onSaveCodeToFile = onSaveCodeDraft
-                        )
+                        val (cleanedContent, mediaItems) = remember(message.content) {
+                            extractMediaMarkers(message.content)
+                        }
+                        if (cleanedContent.isNotEmpty()) {
+                            MarkdownText(
+                                markdown = cleanedContent,
+                                textColor = tokens.textPrimary,
+                                onSaveCodeToFile = onSaveCodeDraft
+                            )
+                        }
+                        mediaItems.forEach { (kind, path) ->
+                            Spacer(modifier = Modifier.height(10.dp))
+                            GeneratedMediaView(kind = kind, path = path)
+                        }
                     } else if (message.status == MessageStatus.STREAMING) {
                         // Subtle shimmer placeholder while streaming initial tokens
                         StreamingShimmerLine()

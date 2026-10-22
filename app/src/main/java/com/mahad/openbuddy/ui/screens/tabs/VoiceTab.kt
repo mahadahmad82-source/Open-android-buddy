@@ -129,6 +129,18 @@ fun VoiceTab(
     val pendingAction by viewModel.pendingVoiceAction.collectAsStateWithLifecycle()
     val voiceHistory by viewModel.voiceActionHistory.collectAsStateWithLifecycle()
     val voiceSettings by viewModel.voiceActionSettings.collectAsStateWithLifecycle()
+    val handsFreeActive by viewModel.handsFreeActive.collectAsStateWithLifecycle()
+
+    // Permission launcher for the hands-free conversation loop
+    val handsFreePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.startHandsFree()
+        } else {
+            viewModel.setVoiceError("Microphone permission is required for hands-free conversation.")
+        }
+    }
 
     var typedCommand by remember { mutableStateOf("") }
     var manualRecipientInput by remember { mutableStateOf("") }
@@ -296,6 +308,57 @@ fun VoiceTab(
                         text = "Urdu (اردو)",
                         isSelected = selectedLanguage == "ur-PK",
                         onClick = { selectedLanguage = "ur-PK" }
+                    )
+                }
+            }
+        }
+
+        // Hands-free conversation (Phase 5): speak -> agent answers aloud -> listen again
+        item {
+            GlassCard(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Hands-Free Conversation",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = tokens.textPrimary
+                        )
+                        Text(
+                            text = if (handsFreeActive) {
+                                "Listening… speak naturally. Replies are read aloud. Works with Agent mode tools too."
+                            } else {
+                                "Talk back and forth with Open Buddy — no typing. It listens, answers out loud, then listens again."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = tokens.textSecondary
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    PillChip(
+                        text = if (handsFreeActive) "Stop" else "Start",
+                        isSelected = handsFreeActive,
+                        onClick = {
+                            if (handsFreeActive) {
+                                viewModel.stopHandsFree()
+                            } else {
+                                val hasAudio = androidx.core.content.ContextCompat.checkSelfPermission(
+                                    context,
+                                    android.Manifest.permission.RECORD_AUDIO
+                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                if (hasAudio) {
+                                    viewModel.startHandsFree()
+                                } else {
+                                    handsFreePermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                }
+                            }
+                        },
+                        testTag = "hands_free_toggle_chip"
                     )
                 }
             }

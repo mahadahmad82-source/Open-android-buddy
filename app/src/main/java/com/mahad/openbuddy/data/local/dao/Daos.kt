@@ -10,8 +10,11 @@ import com.mahad.openbuddy.data.local.entity.AiProviderEntity
 import com.mahad.openbuddy.data.local.entity.AppSettingEntity
 import com.mahad.openbuddy.data.local.entity.CodeDraftEntity
 import com.mahad.openbuddy.data.local.entity.ConversationEntity
+import com.mahad.openbuddy.data.local.entity.McpServerEntity
+import com.mahad.openbuddy.data.local.entity.MemoryEntity
 import com.mahad.openbuddy.data.local.entity.MessageEntity
 import com.mahad.openbuddy.data.local.entity.QueryHistoryEntity
+import com.mahad.openbuddy.data.local.entity.SkillEntity
 import com.mahad.openbuddy.data.local.entity.VoiceActionHistoryEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -175,5 +178,59 @@ interface VoiceActionHistoryDao {
 
     @Query("DELETE FROM voice_action_history")
     suspend fun clearVoiceHistory()
+}
+
+@Dao
+interface MemoryDao {
+    @Query("SELECT * FROM memories ORDER BY createdAt DESC")
+    fun getAllMemories(): Flow<List<MemoryEntity>>
+
+    @Query("SELECT * FROM memories ORDER BY createdAt DESC")
+    suspend fun getAllMemoriesList(): List<MemoryEntity>
+
+    @Query("SELECT * FROM memories WHERE fact LIKE '%' || :keyword || '%' OR category LIKE '%' || :keyword || '%' ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun searchMemories(keyword: String, limit: Int = 10): List<MemoryEntity>
+
+    @Query("SELECT * FROM memories ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun getRecentMemories(limit: Int = 20): List<MemoryEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMemory(memory: MemoryEntity)
+
+    @Query("DELETE FROM memories WHERE id = :id")
+    suspend fun deleteMemoryById(id: String)
+
+    @Query("DELETE FROM memories")
+    suspend fun deleteAllMemories()
+}
+
+@Dao
+interface SkillDao {
+    @Query("SELECT * FROM skills ORDER BY createdAt ASC")
+    fun getAllSkills(): Flow<List<SkillEntity>>
+
+    @Query("SELECT * FROM skills ORDER BY createdAt ASC")
+    suspend fun getAllSkillsList(): List<SkillEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSkill(skill: SkillEntity)
+
+    @Query("DELETE FROM skills WHERE id = :id")
+    suspend fun deleteSkillById(id: String)
+}
+
+@Dao
+interface McpServerDao {
+    @Query("SELECT * FROM mcp_servers ORDER BY createdAt ASC")
+    fun getAllServers(): Flow<List<McpServerEntity>>
+
+    @Query("SELECT * FROM mcp_servers ORDER BY createdAt ASC")
+    suspend fun getAllServersList(): List<McpServerEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertServer(server: McpServerEntity)
+
+    @Query("DELETE FROM mcp_servers WHERE id = :id")
+    suspend fun deleteServerById(id: String)
 }
 

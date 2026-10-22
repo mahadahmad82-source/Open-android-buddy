@@ -78,3 +78,33 @@ data class VoiceActionHistoryEntity(
     val status: String
 )
 
+// Phase 6: long-term agent memory — durable facts the assistant remembers
+// about the user across conversations.
+@Entity(tableName = "memories")
+data class MemoryEntity(
+    @PrimaryKey val id: String,
+    val fact: String,
+    val category: String = "general",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+// Phase 4: user-defined skills — named instruction packs that steer the agent.
+@Entity(tableName = "skills")
+data class SkillEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val description: String,
+    val instructions: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+// Phase 4: MCP (Model Context Protocol) servers the agent can call tools on.
+@Entity(tableName = "mcp_servers")
+data class McpServerEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val url: String,
+    val authToken: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
+

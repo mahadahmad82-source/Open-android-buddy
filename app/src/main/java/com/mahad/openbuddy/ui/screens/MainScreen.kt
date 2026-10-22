@@ -138,6 +138,16 @@ fun MainScreen(
     val voiceActionSettings by viewModel.voiceActionSettings.collectAsStateWithLifecycle()
     val lastBackupInfo by viewModel.lastBackupInfo.collectAsStateWithLifecycle()
 
+    // Agent (Phases 2-7)
+    val agentMode by viewModel.agentMode.collectAsStateWithLifecycle()
+    val speakReplies by viewModel.speakReplies.collectAsStateWithLifecycle()
+    val agentStatusText by viewModel.agentStatusText.collectAsStateWithLifecycle()
+    val pendingToolApproval by viewModel.agentPendingApproval.collectAsStateWithLifecycle()
+    val agentSkills by viewModel.skills.collectAsStateWithLifecycle()
+    val activeSkillId by viewModel.activeSkillId.collectAsStateWithLifecycle()
+    val agentMemories by viewModel.memories.collectAsStateWithLifecycle()
+    val agentMcpServers by viewModel.mcpServers.collectAsStateWithLifecycle()
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -312,7 +322,25 @@ fun MainScreen(
                                 onSaveCodeDraft = { filename, lang, code ->
                                     viewModel.saveCodeDraft(filename, lang, code)
                                 },
-                                onNavigateToSettings = { currentScreen = ScreenTab.SETTINGS }
+                                onNavigateToSettings = { currentScreen = ScreenTab.SETTINGS },
+                                agentMode = agentMode,
+                                onToggleAgentMode = { viewModel.setAgentMode(it) },
+                                agentStatusText = agentStatusText,
+                                pendingApproval = pendingToolApproval,
+                                onApprovalDecision = { viewModel.resolveToolApproval(it) },
+                                skills = agentSkills,
+                                activeSkillId = activeSkillId,
+                                onSelectSkill = { viewModel.setActiveSkill(it) },
+                                speakReplies = speakReplies,
+                                onToggleSpeakReplies = { viewModel.setSpeakReplies(it) },
+                                memories = agentMemories,
+                                onAddMemory = { viewModel.addMemory(it) },
+                                onDeleteMemory = { viewModel.deleteMemory(it) },
+                                onSaveSkill = { id, name, desc, instr -> viewModel.saveSkill(id, name, desc, instr) },
+                                onDeleteSkill = { viewModel.deleteSkill(it) },
+                                mcpServers = agentMcpServers,
+                                onAddMcpServer = { name, url, token -> viewModel.addMcpServer(name, url, token) },
+                                onDeleteMcpServer = { viewModel.deleteMcpServer(it) }
                             )
                         }
                         ScreenTab.GITHUB -> {

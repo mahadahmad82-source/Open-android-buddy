@@ -3,7 +3,13 @@ package com.mahad.openbuddy.ui.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.mahad.openbuddy.data.agent.AgentEngine
+import com.mahad.openbuddy.data.agent.ToolApprovalRequest
 import com.mahad.openbuddy.data.local.OpenBuddyDatabase
+import com.mahad.openbuddy.data.local.entity.AppSettingEntity
+import com.mahad.openbuddy.data.local.entity.McpServerEntity
+import com.mahad.openbuddy.data.local.entity.MemoryEntity
+import com.mahad.openbuddy.data.local.entity.SkillEntity
 import com.mahad.openbuddy.data.provider.AiProviderFactory
 import com.mahad.openbuddy.data.remote.github.DiffItem
 import com.mahad.openbuddy.data.remote.github.GitHubBranch
@@ -16,8 +22,10 @@ import com.mahad.openbuddy.data.repository.OpenBuddyRepository
 import com.mahad.openbuddy.data.repository.GitHubRepository
 import com.mahad.openbuddy.data.repository.SupabaseRepository
 import com.mahad.openbuddy.data.security.SecretStore
+import com.mahad.openbuddy.data.voice.TtsManager
 import com.mahad.openbuddy.data.voice.VoiceIntentExecutor
 import com.mahad.openbuddy.data.voice.VoiceSpeechRecognizerHelper
+import com.mahad.openbuddy.service.AgentForegroundService
 import com.mahad.openbuddy.domain.model.AiError
 import com.mahad.openbuddy.domain.model.AiProviderConfig
 import com.mahad.openbuddy.domain.model.CodeDraft
@@ -25,6 +33,7 @@ import com.mahad.openbuddy.domain.model.Conversation
 import com.mahad.openbuddy.domain.model.DatabaseTableInfo
 import com.mahad.openbuddy.domain.model.LastBackupInfo
 import com.mahad.openbuddy.domain.model.Message
+import com.mahad.openbuddy.domain.model.MessageRole
 import com.mahad.openbuddy.domain.model.ParsedVoiceCommand
 import com.mahad.openbuddy.domain.model.ProviderType
 import com.mahad.openbuddy.domain.model.QueryHistoryItem
@@ -34,15 +43,19 @@ import com.mahad.openbuddy.domain.model.RestorePreviewSummary
 import com.mahad.openbuddy.domain.model.VoiceActionHistoryItem
 import com.mahad.openbuddy.domain.model.VoiceActionType
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -58,13 +71,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         providerFactory = providerFactory
     )
 
+    // Agent (Phase 2-7): TTS + agent engine + related state
+    val ttsManager = TtsManager(application)
+    val agentEngine = AgentEngine(
+        context = application,
+        database = database,
+        secretStore = secretStore,
+        providerFactory = providerFactory,
+        openBuddyRepository = repository,
+        supabaseRepository = supabaseRepository,
+        ttsManager = ttsManager
+    )
+
+    private val _agentMode = MutableStateFlow(false)
+    val agentMode: StateFlow<Boolean> = _agentMode.asStateFlow()
+
+    private val _speakReplies = MutableStateFlow(false)
+    val speakReplies: StateFlow<Boolean> = _speakReplies.asStateFlow()
+
+    private val _activeSkillId = MutableStateFlow<String?>(null)
+    val activeSkillId: StateFlow<String?> = _activeSkillId.asStateFlow()
+
+    private val _handsFreeActive = MutableStateFlow(false)
+    val handsFreeActive: StateFlow<Boolean> = _handsFreeActive.asStateFlow()
+
+    val agentPendingApproval: StateFlow<ToolApprovalRequest?> = agentEngine.pendingApproval
+    val agentStatusText: StateFlow<String?> = agentEngine.statusText
+
+    val skills: StateFlow<List<SkillEntity>> = database.skillDao().getAllSkills()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val memories: StateFlow<List<MemoryEntity>> = database.memoryDao().getAllMemories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val mcpServers: StateFlow<List<McpServerEntity>> = database.mcpServerDao().getAllServers()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private var agentJob: Job? = null
+    private var handsFreeJob: Job? = null
+
     // App Lock State: locked on start if biometric lock is enabled
     private val _isAppLocked = MutableStateFlow(secretStore.isBiometricLockEnabled())
     val isAppLocked: StateFlow<Boolean> = _isAppLocked.asStateFlow()
 
     private var lastBackgroundTime: Long = 0L
 
-    val isGenerating: StateFlow<Boolean> = repository.isGenerating
+    val isGenerating: StateFlow<Boolean> = combine(repository.isGenerating, agentEngine.isRunning) { chat, agent -> chat || agent }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val conversations: StateFlow<List<Conversation>> = repository.conversations
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -193,6 +246,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             repository.initializeDefaultDataIfNeeded()
+            loadAgentSettings()
+            seedBuiltInSkillsIfNeeded()
             loadVoiceActionSettings()
             if (secretStore.hasGitHubToken()) {
                 val token = secretStore.getGitHubToken() ?: ""
@@ -396,13 +451,191 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendMessage(text: String) {
         val convId = activeConversationId.value ?: return
-        viewModelScope.launch {
-            repository.sendMessage(convId, text, viewModelScope)
+        if (_agentMode.value) {
+            agentJob?.cancel()
+            agentJob = viewModelScope.launch {
+                val skill = _activeSkillId.value?.let { id -> skills.value.firstOrNull { it.id == id } }
+                agentEngine.runTurn(convId, text, skill, _speakReplies.value)
+            }
+        } else {
+            viewModelScope.launch {
+                repository.sendMessage(convId, text, viewModelScope)
+            }
         }
     }
 
     fun stopGeneration() {
+        agentJob?.cancel()
+        agentJob = null
+        agentEngine.cancelRun()
         repository.stopGeneration()
+        ttsManager.stop()
+    }
+
+    // ==========================================
+    // Agent mode, skills, memory, MCP (Phases 2-7)
+    // ==========================================
+
+    private fun loadAgentSettings() {
+        viewModelScope.launch {
+            val dao = database.appSettingDao()
+            _agentMode.value = dao.getSettingSync(KEY_AGENT_MODE) == "true"
+            _speakReplies.value = dao.getSettingSync(KEY_SPEAK_REPLIES) == "true"
+            _activeSkillId.value = dao.getSettingSync(KEY_ACTIVE_SKILL_ID)
+        }
+    }
+
+    private fun seedBuiltInSkillsIfNeeded() {
+        viewModelScope.launch {
+            val dao = database.skillDao()
+            if (dao.getAllSkillsList().isEmpty()) {
+                BUILT_IN_SKILLS.forEach { dao.insertSkill(it) }
+            }
+        }
+    }
+
+    fun setAgentMode(enabled: Boolean) {
+        _agentMode.value = enabled
+        viewModelScope.launch {
+            database.appSettingDao().setSetting(AppSettingEntity(KEY_AGENT_MODE, enabled.toString()))
+        }
+    }
+
+    fun setSpeakReplies(enabled: Boolean) {
+        _speakReplies.value = enabled
+        if (!enabled) ttsManager.stop()
+        viewModelScope.launch {
+            database.appSettingDao().setSetting(AppSettingEntity(KEY_SPEAK_REPLIES, enabled.toString()))
+        }
+    }
+
+    fun resolveToolApproval(approved: Boolean) {
+        agentEngine.resolveApproval(approved)
+    }
+
+    fun setActiveSkill(skillId: String?) {
+        _activeSkillId.value = skillId
+        viewModelScope.launch {
+            val dao = database.appSettingDao()
+            if (skillId == null) {
+                dao.setSetting(AppSettingEntity(KEY_ACTIVE_SKILL_ID, ""))
+                _activeSkillId.value = null
+            } else {
+                dao.setSetting(AppSettingEntity(KEY_ACTIVE_SKILL_ID, skillId))
+            }
+        }
+    }
+
+    fun saveSkill(id: String?, name: String, description: String, instructions: String) {
+        viewModelScope.launch {
+            database.skillDao().insertSkill(
+                SkillEntity(
+                    id = id ?: UUID.randomUUID().toString(),
+                    name = name.trim(),
+                    description = description.trim(),
+                    instructions = instructions.trim()
+                )
+            )
+        }
+    }
+
+    fun deleteSkill(id: String) {
+        viewModelScope.launch {
+            database.skillDao().deleteSkillById(id)
+            if (_activeSkillId.value == id) setActiveSkill(null)
+        }
+    }
+
+    fun addMemory(fact: String, category: String = "general") {
+        viewModelScope.launch {
+            database.memoryDao().insertMemory(
+                MemoryEntity(id = UUID.randomUUID().toString(), fact = fact.trim(), category = category)
+            )
+        }
+    }
+
+    fun deleteMemory(id: String) {
+        viewModelScope.launch {
+            database.memoryDao().deleteMemoryById(id)
+        }
+    }
+
+    fun addMcpServer(name: String, url: String, authToken: String?) {
+        viewModelScope.launch {
+            database.mcpServerDao().insertServer(
+                McpServerEntity(
+                    id = UUID.randomUUID().toString(),
+                    name = name.trim(),
+                    url = url.trim(),
+                    authToken = authToken?.trim()?.ifBlank { null }
+                )
+            )
+        }
+    }
+
+    fun deleteMcpServer(id: String) {
+        viewModelScope.launch {
+            database.mcpServerDao().deleteServerById(id)
+        }
+    }
+
+    // ==========================================
+    // Hands-free voice conversation (Phase 5)
+    // ==========================================
+
+    fun startHandsFree() {
+        if (_handsFreeActive.value) return
+        _handsFreeActive.value = true
+        AgentForegroundService.start(getApplication(), "Hands-free conversation is on")
+        listenForHandsFree()
+    }
+
+    fun stopHandsFree() {
+        _handsFreeActive.value = false
+        handsFreeJob?.cancel()
+        handsFreeJob = null
+        speechRecognizerHelper.stopListening()
+        ttsManager.stop()
+        AgentForegroundService.stop(getApplication())
+    }
+
+    private fun listenForHandsFree() {
+        if (!_handsFreeActive.value) return
+        speechRecognizerHelper.onPartialResult = null
+        speechRecognizerHelper.onFinalResult = { transcript ->
+            if (!_handsFreeActive.value) return@onFinalResult
+            if (transcript.isNotBlank()) {
+                onHandsFreeTranscript(transcript)
+            } else {
+                listenForHandsFree()
+            }
+        }
+        speechRecognizerHelper.startListening(null)
+    }
+
+    private fun onHandsFreeTranscript(transcript: String) {
+        sendMessage(transcript)
+        handsFreeJob?.cancel()
+        handsFreeJob = viewModelScope.launch {
+            // Wait for the reply to finish generating…
+            delay(350)
+            if (isGenerating.value) isGenerating.first { !it }
+            if (!_handsFreeActive.value) return@launch
+            // …then speak it (hands-free always speaks), and listen again.
+            val reply = activeMessages.value.lastOrNull { it.role == MessageRole.ASSISTANT }?.content
+            if (!reply.isNullOrBlank() && ttsManager.isReady()) {
+                ttsManager.onSpeakingFinished = {
+                    if (_handsFreeActive.value) listenForHandsFree()
+                }
+                ttsManager.speak(reply)
+                // Safety net: if TTS never reports completion, resume listening anyway.
+                delay(60_000)
+                if (_handsFreeActive.value && !isVoiceListening.value) listenForHandsFree()
+            } else {
+                delay(600)
+                if (_handsFreeActive.value) listenForHandsFree()
+            }
+        }
     }
 
     fun retryLastAssistantMessage(messageId: String) {
@@ -789,6 +1022,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         speechRecognizerHelper.stopListening()
+        ttsManager.shutdown()
+    }
+
+    companion object {
+        private const val KEY_AGENT_MODE = "agent_mode"
+        private const val KEY_SPEAK_REPLIES = "speak_replies"
+        private const val KEY_ACTIVE_SKILL_ID = "active_skill_id"
+
+        private val BUILT_IN_SKILLS = listOf(
+            SkillEntity(
+                id = "builtin-code-reviewer",
+                name = "Code Reviewer",
+                description = "Reviews code for bugs, security and style",
+                instructions = "Act as a senior code reviewer. When the user shares or points to code, examine it for correctness bugs, security issues, performance problems and readability. Report findings as a prioritized list (critical first) with file/line references where possible, then suggest concrete fixes. Use the GitHub tools to read files when the user names a repository."
+            ),
+            SkillEntity(
+                id = "builtin-sql-analyst",
+                name = "SQL Analyst",
+                description = "Writes and runs careful SQL on the connected database",
+                instructions = "Act as a careful database analyst for the user's connected Supabase/Postgres database. Prefer read-only SELECT queries. Before any write or destructive statement, explain in plain words what it will change and how many rows it may affect; those statements need the user's approval in the app. Always show the SQL you ran and summarize the result rows in plain language."
+            ),
+            SkillEntity(
+                id = "builtin-daily-planner",
+                name = "Daily Planner",
+                description = "Plans the day: reminders, timers, calendar events",
+                instructions = "Act as the user's daily planning assistant. Help them organize their day using the device tools: create calendar events for appointments, set timers for focused work, and remember durable preferences with remember_fact. Confirm times using current_datetime when the request is relative (\"in 2 hours\", \"tomorrow morning\")."
+            )
+        )
     }
 }
 
