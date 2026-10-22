@@ -66,7 +66,25 @@ class OpenAiCompatibleProvider(
             }
             val item = JSONObject()
             item.put("role", role)
-            item.put("content", msg.content)
+            // User-attached media: OpenAI-style vision takes images as data URIs;
+            // video is not viewable by these models, so it is noted as text.
+            val attachmentMime = msg.attachmentMime
+            val attachmentBase64 = if (msg.role == MessageRole.USER && msg.attachmentPath != null && attachmentMime?.startsWith("image/") == true) {
+                com.mahad.openbuddy.data.media.AttachmentSupport.loadBase64(msg.attachmentPath)
+            } else {
+                null
+            }
+            if (attachmentBase64 != null) {
+                val blocks = JSONArray()
+                blocks.put(JSONObject().put("type", "text").put("text", msg.content))
+                val imageUrl = JSONObject().put("url", "data:${attachmentMime ?: "image/jpeg"};base64,$attachmentBase64")
+                blocks.put(JSONObject().put("type", "image_url").put("image_url", imageUrl))
+                item.put("content", blocks)
+            } else if (msg.role == MessageRole.USER && msg.attachmentPath != null) {
+                item.put("content", msg.content + "\n[The user attached a media file that this provider cannot view.]")
+            } else {
+                item.put("content", msg.content)
+            }
             messagesArray.put(item)
         }
         jsonBody.put("messages", messagesArray)

@@ -102,13 +102,14 @@ class AgentEngine(
         conversationId: String,
         userText: String,
         activeSkill: SkillEntity?,
-        speakReplies: Boolean
+        speakReplies: Boolean,
+        attachment: com.mahad.openbuddy.data.media.StagedAttachment? = null
     ) = withContext(Dispatchers.IO) {
-        if (userText.isBlank() || _isRunning.value) return@withContext
+        if ((userText.isBlank() && attachment == null) || _isRunning.value) return@withContext
         _isRunning.value = true
         AgentForegroundService.start(context, "Agent is working on your request…")
         try {
-            runTurnInternal(conversationId, userText, activeSkill, speakReplies)
+            runTurnInternal(conversationId, userText, activeSkill, speakReplies, attachment)
         } finally {
             _isRunning.value = false
             _statusText.value = null
@@ -121,7 +122,8 @@ class AgentEngine(
         conversationId: String,
         userText: String,
         activeSkill: SkillEntity?,
-        speakReplies: Boolean
+        speakReplies: Boolean,
+        attachment: com.mahad.openbuddy.data.media.StagedAttachment? = null
     ) {
         // 1. Persist user message (+ first-message auto-title, mirroring normal chat)
         val existing = messageDao.getMessageListForConversation(conversationId)
@@ -134,7 +136,9 @@ class AgentEngine(
                 id = UUID.randomUUID().toString(),
                 conversationId = conversationId,
                 role = MessageRole.USER.name,
-                content = userText.trim(),
+                content = userText.trim() + (attachment?.let {
+                    com.mahad.openbuddy.data.media.AttachmentSupport.markerFor(it)
+                } ?: ""),
                 timestamp = System.currentTimeMillis(),
                 status = MessageStatus.COMPLETED.name
             )
@@ -163,9 +167,25 @@ class AgentEngine(
             val systemPrompt = buildSystemPrompt(userText, activeSkill, tools)
 
             // Working history: recent conversation + this turn's tool exchanges.
-            val history = messageDao.getMessageListForConversation(conversationId)
+            // The newest user message keeps its attachment (vision); markers are
+            // stripped from the text the model sees.
+            val historyEntities = messageDao.getMessageListForConversation(conversationId)
                 .filter { it.id != assistantId }
-                .map { ChatMessage(role = MessageRole.fromString(it.role), content = it.content) }
+            val lastUserEntityId = historyEntities.lastOrNull { it.role == MessageRole.USER.name }?.id
+            val history = historyEntities
+                .map { entity ->
+                    val (cleanContent, att) = if (entity.role == MessageRole.USER.name) {
+                        com.mahad.openbuddy.data.media.AttachmentSupport.extract(entity.content)
+                    } else {
+                        entity.content to null
+                    }
+                    ChatMessage(
+                        role = MessageRole.fromString(entity.role),
+                        content = cleanContent,
+                        attachmentPath = if (entity.id == lastUserEntityId) att?.path else null,
+                        attachmentMime = if (entity.id == lastUserEntityId) att?.mimeType else null
+                    )
+                }
                 .let { capHistory(it) }
                 .toMutableList()
 

@@ -95,7 +95,10 @@ data class ChatMessage(
     val sender: MessageRole = role,
     val codeSnippet: String? = null,
     val codeLanguage: String? = null,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    /** Optional media the user attached to this message (sent to vision-capable providers). */
+    val attachmentPath: String? = null,
+    val attachmentMime: String? = null
 )
 
 data class GitFile(

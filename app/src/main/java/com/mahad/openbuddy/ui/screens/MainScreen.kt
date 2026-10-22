@@ -24,6 +24,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,6 +47,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
@@ -116,6 +120,44 @@ fun MainScreen(
     val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(ScreenTab.CHAT) }
 
+    // If the previous run crashed, show the saved crash report once so the
+    // user can copy/send it — this is how tab crashes get diagnosed exactly.
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+    var crashReport by remember { mutableStateOf(com.mahad.openbuddy.data.CrashReporter.readLastCrash(appContext)) }
+    if (crashReport != null) {
+        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = {
+                com.mahad.openbuddy.data.CrashReporter.clear(appContext)
+                crashReport = null
+            },
+            title = { Text("Last crash report") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 380.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = crashReport ?: "",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(crashReport ?: ""))
+                }) { Text("Copy report") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    com.mahad.openbuddy.data.CrashReporter.clear(appContext)
+                    crashReport = null
+                }) { Text("Dismiss") }
+            }
+        )
+    }
+
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val activeConversationId by viewModel.activeConversationId.collectAsStateWithLifecycle()
     val messages by viewModel.activeMessages.collectAsStateWithLifecycle()
@@ -147,6 +189,7 @@ fun MainScreen(
     val activeSkillId by viewModel.activeSkillId.collectAsStateWithLifecycle()
     val agentMemories by viewModel.memories.collectAsStateWithLifecycle()
     val agentMcpServers by viewModel.mcpServers.collectAsStateWithLifecycle()
+    val pendingAttachment by viewModel.pendingAttachment.collectAsStateWithLifecycle()
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -340,7 +383,10 @@ fun MainScreen(
                                 onDeleteSkill = { viewModel.deleteSkill(it) },
                                 mcpServers = agentMcpServers,
                                 onAddMcpServer = { name, url, token -> viewModel.addMcpServer(name, url, token) },
-                                onDeleteMcpServer = { viewModel.deleteMcpServer(it) }
+                                onDeleteMcpServer = { viewModel.deleteMcpServer(it) },
+                                pendingAttachment = pendingAttachment,
+                                onMediaPicked = { uri -> viewModel.stageAttachment(uri) },
+                                onClearAttachment = { viewModel.clearPendingAttachment() }
                             )
                         }
                         ScreenTab.GITHUB -> {

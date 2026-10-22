@@ -58,6 +58,16 @@ class GeminiProvider(
             item.put("role", role)
             val parts = JSONArray()
             parts.put(JSONObject().put("text", msg.content))
+            // User-attached media: Gemini accepts images and video inline.
+            if (msg.role == MessageRole.USER && msg.attachmentPath != null) {
+                val base64 = com.mahad.openbuddy.data.media.AttachmentSupport.loadBase64(msg.attachmentPath)
+                if (base64 != null) {
+                    val inlineData = JSONObject()
+                        .put("mimeType", msg.attachmentMime ?: "image/jpeg")
+                        .put("data", base64)
+                    parts.put(JSONObject().put("inlineData", inlineData))
+                }
+            }
             item.put("parts", parts)
             contents.put(item)
         }

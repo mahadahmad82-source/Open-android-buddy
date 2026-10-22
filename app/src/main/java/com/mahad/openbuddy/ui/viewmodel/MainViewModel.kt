@@ -42,9 +42,11 @@ import com.mahad.openbuddy.domain.model.RestoreMode
 import com.mahad.openbuddy.domain.model.RestorePreviewSummary
 import com.mahad.openbuddy.domain.model.VoiceActionHistoryItem
 import com.mahad.openbuddy.domain.model.VoiceActionType
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -449,17 +451,75 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Chat & Provider Operations
     // ==========================================
 
+    // Media attachment staged from the chat photo/video picker, sent with the
+    // next message (vision for Gemini/Claude/OpenAI-style providers).
+    private val _pendingAttachment = MutableStateFlow<com.mahad.openbuddy.data.media.StagedAttachment?>(null)
+    val pendingAttachment: StateFlow<com.mahad.openbuddy.data.media.StagedAttachment?> = _pendingAttachment.asStateFlow()
+
+    fun stageAttachment(uri: android.net.Uri) {
+        viewModelScope.launch {
+            val staged = withContext(Dispatchers.IO) {
+                try {
+                    val app = getApplication<Application>()
+                    val resolver = app.contentResolver
+                    val mime = resolver.getType(uri) ?: "image/jpeg"
+                    if (!mime.startsWith("image/") && !mime.startsWith("video/")) return@withContext null
+                    val ext = when {
+                        mime.contains("png") -> "png"
+                        mime.contains("webp") -> "webp"
+                        mime.contains("gif") -> "gif"
+                        mime.contains("quicktime") -> "mov"
+                        mime.contains("mp4") -> "mp4"
+                        mime.contains("webm") -> "webm"
+                        else -> "jpg"
+                    }
+                    val dir = java.io.File(app.filesDir, "attachments").apply { mkdirs() }
+                    val file = java.io.File(dir, "att-${System.currentTimeMillis()}.$ext")
+                    val copied = resolver.openInputStream(uri)?.use { input ->
+                        file.outputStream().use { output -> input.copyTo(output) }
+                        true
+                    } ?: false
+                    if (!copied) return@withContext null
+                    // Inline vision payloads have practical size limits; keep the cap generous but real.
+                    if (file.length() > 25L * 1024 * 1024) {
+                        file.delete()
+                        return@withContext null
+                    }
+                    com.mahad.openbuddy.data.media.StagedAttachment(
+                        path = file.absolutePath,
+                        mimeType = mime,
+                        kind = if (mime.startsWith("video/")) "video" else "image",
+                        displayName = file.name
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            if (staged != null) {
+                _pendingAttachment.value = staged
+            }
+        }
+    }
+
+    fun clearPendingAttachment() {
+        _pendingAttachment.value = null
+    }
+
     fun sendMessage(text: String) {
         val convId = activeConversationId.value ?: return
+        val attachment = _pendingAttachment.value
+        val effectiveText = if (text.isBlank() && attachment != null) "Attached media" else text
+        if (effectiveText.isBlank() && attachment == null) return
+        _pendingAttachment.value = null
         if (_agentMode.value) {
             agentJob?.cancel()
             agentJob = viewModelScope.launch {
                 val skill = _activeSkillId.value?.let { id -> skills.value.firstOrNull { it.id == id } }
-                agentEngine.runTurn(convId, text, skill, _speakReplies.value)
+                agentEngine.runTurn(convId, effectiveText, skill, _speakReplies.value, attachment)
             }
         } else {
             viewModelScope.launch {
-                repository.sendMessage(convId, text, viewModelScope)
+                repository.sendMessage(convId, effectiveText, viewModelScope, attachment)
             }
         }
     }

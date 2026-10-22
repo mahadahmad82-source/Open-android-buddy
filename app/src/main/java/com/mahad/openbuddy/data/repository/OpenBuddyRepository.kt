@@ -505,9 +505,10 @@ fun main() {
     suspend fun sendMessage(
         conversationId: String,
         userText: String,
-        scope: CoroutineScope
+        scope: CoroutineScope,
+        attachment: com.mahad.openbuddy.data.media.StagedAttachment? = null
     ) = withContext(Dispatchers.IO) {
-        if (userText.isBlank()) return@withContext
+        if (userText.isBlank() && attachment == null) return@withContext
 
         // Auto-title conversation on first user query
         val existingMessages = messageDao.getMessageListForConversation(conversationId)
@@ -525,13 +526,15 @@ fun main() {
             userText
         }
 
-        // Insert user message in database
+        // Insert user message in database (attachment rides as a media marker)
         val userMessageId = UUID.randomUUID().toString()
         val userMsgEntity = MessageEntity(
             id = userMessageId,
             conversationId = conversationId,
             role = MessageRole.USER.name,
-            content = userText.trim(),
+            content = userText.trim() + (attachment?.let {
+                com.mahad.openbuddy.data.media.AttachmentSupport.markerFor(it)
+            } ?: ""),
             timestamp = System.currentTimeMillis(),
             status = MessageStatus.COMPLETED.name,
             errorMessage = null
@@ -609,14 +612,26 @@ fun main() {
                 val chatMessages = historyEntities
                     .filter { it.id != assistantMessageId }
                     .map { entity ->
-                        val content = if (entity.role == MessageRole.USER.name && isRedacting) {
-                            SensitiveDataRedactor.redact(entity.content).text
+                        // User attachments live in the stored text as a media
+                        // marker: strip it from the text sent to the provider,
+                        // and attach the file natively on the newest user turn.
+                        val isLastUserMessage = entity.id == historyEntities
+                            .lastOrNull { it.role == MessageRole.USER.name }?.id
+                        val (cleanContent, attachment) = if (entity.role == MessageRole.USER.name) {
+                            com.mahad.openbuddy.data.media.AttachmentSupport.extract(entity.content)
                         } else {
-                            entity.content
+                            entity.content to null
+                        }
+                        val content = if (entity.role == MessageRole.USER.name && isRedacting) {
+                            SensitiveDataRedactor.redact(cleanContent).text
+                        } else {
+                            cleanContent
                         }
                         ChatMessage(
                             role = MessageRole.fromString(entity.role),
-                            content = content
+                            content = content,
+                            attachmentPath = if (isLastUserMessage) attachment?.path else null,
+                            attachmentMime = if (isLastUserMessage) attachment?.mimeType else null
                         )
                     }
 

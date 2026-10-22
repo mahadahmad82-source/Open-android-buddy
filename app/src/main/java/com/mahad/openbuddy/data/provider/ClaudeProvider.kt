@@ -55,7 +55,28 @@ class ClaudeProvider(
             val item = JSONObject()
             val role = if (msg.role == MessageRole.USER) "user" else "assistant"
             item.put("role", role)
-            item.put("content", msg.content)
+            // User-attached media: Claude sees images as base64 blocks;
+            // it cannot view video, so the attachment is noted as text.
+            val attachmentMime = msg.attachmentMime
+            val attachmentBase64 = if (msg.role == MessageRole.USER && msg.attachmentPath != null && attachmentMime?.startsWith("image/") == true) {
+                com.mahad.openbuddy.data.media.AttachmentSupport.loadBase64(msg.attachmentPath)
+            } else {
+                null
+            }
+            if (attachmentBase64 != null) {
+                val blocks = JSONArray()
+                blocks.put(JSONObject().put("type", "text").put("text", msg.content))
+                val source = JSONObject()
+                    .put("type", "base64")
+                    .put("media_type", attachmentMime ?: "image/jpeg")
+                    .put("data", attachmentBase64)
+                blocks.put(JSONObject().put("type", "image").put("source", source))
+                item.put("content", blocks)
+            } else if (msg.role == MessageRole.USER && msg.attachmentPath != null) {
+                item.put("content", msg.content + "\n[The user attached a media file that this provider cannot view.]")
+            } else {
+                item.put("content", msg.content)
+            }
             messagesArray.put(item)
         }
         jsonBody.put("messages", messagesArray)

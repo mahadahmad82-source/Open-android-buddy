@@ -24,6 +24,8 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Save the stack trace of any crash so it can be shown on next launch.
+        com.mahad.openbuddy.data.CrashReporter.install(this)
         enableEdgeToEdge()
         setContent {
             OpenBuddyTheme {

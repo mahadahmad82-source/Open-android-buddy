@@ -18,6 +18,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,12 +46,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -128,6 +134,10 @@ fun ChatScreen(
     mcpServers: List<com.mahad.openbuddy.data.local.entity.McpServerEntity> = emptyList(),
     onAddMcpServer: (String, String, String?) -> Unit = { _, _, _ -> },
     onDeleteMcpServer: (String) -> Unit = {},
+    // Media attachments (image/video sent with a message)
+    pendingAttachment: com.mahad.openbuddy.data.media.StagedAttachment? = null,
+    onMediaPicked: (android.net.Uri) -> Unit = {},
+    onClearAttachment: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tokens = GlassTheme.tokens
@@ -139,6 +149,13 @@ fun ChatScreen(
     var inputText by remember { mutableStateOf("") }
     var voiceLanguage by remember { mutableStateOf("en-US") } // "en-US" or "ur-PK"
     var showAgentHub by remember { mutableStateOf(false) }
+
+    // System photo/video picker for message attachments (no permission needed)
+    val mediaPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) onMediaPicked(uri)
+    }
 
     // Sync live voice transcript into input text field
     LaunchedEffect(voiceTranscript) {
@@ -301,6 +318,71 @@ fun ChatScreen(
                 onOpenHub = { showAgentHub = true }
             )
 
+            // Pending attachment preview (image/video to send with the next message)
+            if (pendingAttachment != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(tokens.glassFillStrong)
+                        .border(tokens.glassBorderStroke, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (pendingAttachment.kind == "image") {
+                        val thumb = remember(pendingAttachment.path) {
+                            android.graphics.BitmapFactory.decodeFile(pendingAttachment.path)
+                        }
+                        if (thumb != null) {
+                            Image(
+                                bitmap = thumb.asImageBitmap(),
+                                contentDescription = "Attached image",
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Image,
+                                contentDescription = null,
+                                tint = tokens.accentCyan,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.PlayCircle,
+                            contentDescription = null,
+                            tint = tokens.accentCyan,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = pendingAttachment.displayName,
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = tokens.textPrimary,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = if (pendingAttachment.kind == "image") "Image attached — it will be sent with your message" else "Video attached — Gemini can watch it; other providers get a note",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = tokens.textSecondary
+                        )
+                    }
+                    IconButton(onClick = onClearAttachment) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Remove attachment",
+                            tint = tokens.textSecondary
+                        )
+                    }
+                }
+            }
+
             // Floating Glass Input Bar with Mic Button
             FloatingGlassInputBar(
                 inputText = inputText,
@@ -311,11 +393,19 @@ fun ChatScreen(
                     voiceLanguage = if (voiceLanguage == "en-US") "ur-PK" else "en-US"
                 },
                 onTextChanged = { inputText = it },
+                hasAttachment = pendingAttachment != null,
+                onAttachClick = {
+                    mediaPickerLauncher.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                        )
+                    )
+                },
                 onSend = {
                     if (isVoiceListening) {
                         onStopVoiceListening()
                     }
-                    if (inputText.isNotBlank()) {
+                    if (inputText.isNotBlank() || pendingAttachment != null) {
                         val textToSend = inputText.trim()
                         inputText = ""
                         onSendMessage(textToSend)
@@ -399,12 +489,23 @@ private fun MessageBubbleItem(
                     .testTag("user_message_bubble")
                     .padding(14.dp)
             ) {
-                Text(
-                    text = message.content,
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
-                    lineHeight = 22.sp
-                )
+                val (cleanedUserContent, userMediaItems) = remember(message.content) {
+                    extractMediaMarkers(message.content)
+                }
+                Column {
+                    if (cleanedUserContent.isNotEmpty()) {
+                        Text(
+                            text = cleanedUserContent,
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+                            lineHeight = 22.sp
+                        )
+                    }
+                    userMediaItems.forEach { (kind, path) ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        GeneratedMediaView(kind = kind, path = path)
+                    }
+                }
             }
         } else {
             // Assistant Bubble: Frosted Glass with gradient stroke (18dp, 18dp, 18dp, 4dp)
@@ -628,7 +729,9 @@ private fun FloatingGlassInputBar(
     onTextChanged: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    onMicClick: () -> Unit = {}
+    onMicClick: () -> Unit = {},
+    onAttachClick: () -> Unit = {},
+    hasAttachment: Boolean = false
 ) {
     val tokens = GlassTheme.tokens
     val haptic = LocalHapticFeedback.current
@@ -704,6 +807,30 @@ private fun FloatingGlassInputBar(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Attach image/video Button
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(SolidColor(tokens.glassFill))
+                        .border(tokens.glassBorderStroke, CircleShape)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onAttachClick()
+                        }
+                        .testTag("chat_attach_media_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AttachFile,
+                        contentDescription = "Attach image or video",
+                        tint = tokens.textSecondary,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
                 // Voice Microphone Button
                 Box(
                     modifier = Modifier
@@ -809,7 +936,7 @@ private fun FloatingGlassInputBar(
                         )
                     }
                 } else {
-                    val canSend = inputText.isNotBlank()
+                    val canSend = inputText.isNotBlank() || hasAttachment
                     val interactionSource = remember { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
                     val scale by animateFloatAsState(

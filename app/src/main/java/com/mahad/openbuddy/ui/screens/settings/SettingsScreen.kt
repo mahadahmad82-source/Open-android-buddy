@@ -1,7 +1,12 @@
 package com.mahad.openbuddy.ui.screens.settings
 
 import android.app.Activity
+import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -242,7 +247,7 @@ fun SettingsScreen(
                         outputStream.flush()
                     }
                     val timeStampStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                    val fileName = "codepilot_backup_$timeStampStr.cpbackup"
+                    val fileName = "openbuddy_backup_$timeStampStr.cpbackup"
                     onRecordCompletedBackup?.invoke(fileName, bytes.size.toLong())
                     pendingEncryptedBackupPayload = null
                     val formatted = if (bytes.size < 1024) "${bytes.size} B" else String.format(Locale.US, "%.1f KB", bytes.size / 1024.0)
@@ -507,8 +512,23 @@ fun SettingsScreen(
                 showCreateBackupDialog = false
                 pendingEncryptedBackupPayload = encryptedPayload
                 val timeStampStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                val suggestedFileName = "codepilot_backup_$timeStampStr.cpbackup"
-                createDocumentLauncher.launch(suggestedFileName)
+                val suggestedFileName = "openbuddy_backup_$timeStampStr.cpbackup"
+                scope.launch {
+                    // Preferred route: save straight into the public Downloads
+                    // folder (no picker, works like a normal download).
+                    val savedToDownloads = saveBackupToDownloads(context, suggestedFileName, encryptedPayload)
+                    if (savedToDownloads) {
+                        onRecordCompletedBackup?.invoke(
+                            suggestedFileName,
+                            encryptedPayload.toByteArray(Charsets.UTF_8).size.toLong()
+                        )
+                        pendingEncryptedBackupPayload = null
+                        snackbarHostState.showSnackbar("Backup saved to Downloads: $suggestedFileName")
+                    } else {
+                        // Fallback: let the user pick a location via the system saver.
+                        createDocumentLauncher.launch(suggestedFileName)
+                    }
+                }
             }
         )
     }
@@ -3427,3 +3447,41 @@ private fun getVoiceActionSettingIcon(type: VoiceActionType): ImageVector {
     }
 }
 
+
+/**
+ * Saves the encrypted backup payload straight into the public Downloads
+ * folder via MediaStore (Android 10+, no permission or picker needed), so
+ * creating a backup behaves like a normal download. Returns false when the
+ * direct save is unavailable, letting the caller fall back to the SAF picker.
+ */
+private suspend fun saveBackupToDownloads(context: Context, fileName: String, payload: String): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+    return try {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: return@withContext false
+            val written = resolver.openOutputStream(uri)?.use { stream ->
+                stream.write(payload.toByteArray(Charsets.UTF_8))
+                stream.flush()
+                true
+            } ?: false
+            if (!written) {
+                resolver.delete(uri, null, null)
+                return@withContext false
+            }
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            true
+        }
+    } catch (e: Exception) {
+        false
+    }
+}
