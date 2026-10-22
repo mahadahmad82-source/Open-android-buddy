@@ -58,7 +58,7 @@ class AgentForegroundService : Service() {
             try {
                 startForeground(NOTIFICATION_ID, notification)
             } catch (e2: Exception) {
-                com.mahad.openbuddy.data.CrashReporter.record(e2)
+                com.mahad.openbuddy.data.CrashReporter.record(this, e2)
             }
         }
     }
