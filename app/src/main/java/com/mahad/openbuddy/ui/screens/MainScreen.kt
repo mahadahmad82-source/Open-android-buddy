@@ -191,6 +191,13 @@ fun MainScreen(
     val agentMcpServers by viewModel.mcpServers.collectAsStateWithLifecycle()
     val pendingAttachment by viewModel.pendingAttachment.collectAsStateWithLifecycle()
 
+    // Media picked via MainActivity's classic picker flow lands here.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        com.mahad.openbuddy.ui.ActivityResults.pickedMedia.collect { uri ->
+            viewModel.stageAttachment(uri)
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -385,7 +392,6 @@ fun MainScreen(
                                 onAddMcpServer = { name, url, token -> viewModel.addMcpServer(name, url, token) },
                                 onDeleteMcpServer = { viewModel.deleteMcpServer(it) },
                                 pendingAttachment = pendingAttachment,
-                                onMediaPicked = { uri -> viewModel.stageAttachment(uri) },
                                 onClearAttachment = { viewModel.clearPendingAttachment() }
                             )
                         }

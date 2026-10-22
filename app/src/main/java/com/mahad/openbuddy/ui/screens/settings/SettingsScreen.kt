@@ -225,47 +225,39 @@ fun SettingsScreen(
     var showRestoreOptionsDialog by remember { mutableStateOf(false) }
     var restoreSummaryPreview by remember { mutableStateOf<RestorePreviewSummary?>(null) }
 
-    val createDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
-    ) { uri ->
-        if (uri != null && pendingEncryptedBackupPayload != null) {
-            scope.launch {
-                try {
-                    val payload = pendingEncryptedBackupPayload!!
-                    val bytes = payload.toByteArray(Charsets.UTF_8)
-                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                        outputStream.write(bytes)
-                        outputStream.flush()
-                    }
-                    val timeStampStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                    val fileName = "openbuddy_backup_$timeStampStr.cpbackup"
-                    onRecordCompletedBackup?.invoke(fileName, bytes.size.toLong())
-                    pendingEncryptedBackupPayload = null
-                    val formatted = if (bytes.size < 1024) "${bytes.size} B" else String.format(Locale.US, "%.1f KB", bytes.size / 1024.0)
-                    snackbarHostState.showSnackbar("Encrypted backup saved successfully ($formatted)")
-                } catch (e: Exception) {
-                    snackbarHostState.showSnackbar("Error saving backup file: ${e.message}")
+    // File pickers run through MainActivity's classic startActivityForResult
+    // flow: the Compose registry launchers can crash on this FragmentActivity
+    // host ("Can only use lower 16 bits for requestCode").
+    LaunchedEffect(Unit) {
+        com.mahad.openbuddy.ui.ActivityResults.pickedBackupFile.collect { uri ->
+            try {
+                val content = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                if (!content.isNullOrBlank()) {
+                    pendingFileContentToDecrypt = content
+                    showDecryptBackupDialog = true
+                } else {
+                    snackbarHostState.showSnackbar("Selected backup file is empty.")
                 }
+            } catch (e: Exception) {
+                snackbarHostState.showSnackbar("Could not read backup file: ${e.message}")
             }
         }
     }
 
-    val openDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                try {
-                    val content = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                    if (!content.isNullOrBlank()) {
-                        pendingFileContentToDecrypt = content
-                        showDecryptBackupDialog = true
-                    } else {
-                        snackbarHostState.showSnackbar("Selected backup file is empty.")
-                    }
-                } catch (e: Exception) {
-                    snackbarHostState.showSnackbar("Could not read backup file: ${e.message}")
-                }
+    LaunchedEffect(Unit) {
+        com.mahad.openbuddy.ui.ActivityResults.backupDocumentSaved.collect { saved ->
+            val payload = pendingEncryptedBackupPayload
+            if (saved && payload != null) {
+                val bytes = payload.toByteArray(Charsets.UTF_8)
+                val timeStampStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                val fileName = "openbuddy_backup_$timeStampStr.cpbackup"
+                onRecordCompletedBackup?.invoke(fileName, bytes.size.toLong())
+                pendingEncryptedBackupPayload = null
+                val formatted = if (bytes.size < 1024) "${bytes.size} B" else String.format(Locale.US, "%.1f KB", bytes.size / 1024.0)
+                snackbarHostState.showSnackbar("Encrypted backup saved successfully ($formatted)")
+            } else if (!saved) {
+                pendingEncryptedBackupPayload = null
+                snackbarHostState.showSnackbar("Error saving backup file.")
             }
         }
     }
@@ -328,7 +320,7 @@ fun SettingsScreen(
                         lastBackupInfo = lastBackupInfo,
                         onCreateBackupClick = { showCreateBackupDialog = true },
                         onRestoreBackupClick = {
-                            openDocumentLauncher.launch(arrayOf("*/*"))
+                            (context as? com.mahad.openbuddy.MainActivity)?.launchBackupFilePicker()
                         },
                         onPasteBackupClick = {
                             directPasteBackupContent = ""
@@ -517,7 +509,8 @@ fun SettingsScreen(
                         snackbarHostState.showSnackbar("Backup saved to Downloads: $suggestedFileName")
                     } else {
                         // Fallback: let the user pick a location via the system saver.
-                        createDocumentLauncher.launch(suggestedFileName)
+                        com.mahad.openbuddy.ui.PendingFileWrite.payload = encryptedPayload
+                        (context as? com.mahad.openbuddy.MainActivity)?.launchCreateBackupDocument(suggestedFileName)
                     }
                 }
             }

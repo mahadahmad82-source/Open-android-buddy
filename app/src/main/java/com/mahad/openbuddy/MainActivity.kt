@@ -50,8 +50,91 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Classic activity-result flows (see ui/ActivityResults.kt for why the
+    // Compose registry launchers are unsafe on this FragmentActivity host).
+    // ------------------------------------------------------------------
+
+    /** System photo picker (API 33+) or document picker for chat media. */
+    fun launchMediaPicker() {
+        val intent = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            android.content.Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).apply {
+                putExtra(android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX, 1)
+            }
+        } else {
+            android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(android.content.Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
+            }
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQUEST_PICK_MEDIA)
+    }
+
+    /** Document picker for choosing a backup file to restore. */
+    fun launchBackupFilePicker() {
+        val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQUEST_PICK_BACKUP)
+    }
+
+    /** System "create document" saver for a backup (payload in PendingFileWrite). */
+    fun launchCreateBackupDocument(fileName: String) {
+        val intent = android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            type = "application/octet-stream"
+            putExtra(android.content.Intent.EXTRA_TITLE, fileName)
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQUEST_CREATE_BACKUP)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) {
+            if (requestCode == REQUEST_CREATE_BACKUP) {
+                com.mahad.openbuddy.ui.PendingFileWrite.payload = null
+            }
+            return
+        }
+        when (requestCode) {
+            REQUEST_PICK_MEDIA -> data?.data?.let {
+                com.mahad.openbuddy.ui.ActivityResults.pickedMedia.tryEmit(it)
+            }
+            REQUEST_PICK_BACKUP -> data?.data?.let {
+                com.mahad.openbuddy.ui.ActivityResults.pickedBackupFile.tryEmit(it)
+            }
+            REQUEST_CREATE_BACKUP -> {
+                val uri = data?.data
+                val payload = com.mahad.openbuddy.ui.PendingFileWrite.payload
+                var ok = false
+                if (uri != null && payload != null) {
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(payload.toByteArray(Charsets.UTF_8))
+                            out.flush()
+                        }
+                        ok = true
+                    } catch (e: Exception) {
+                        ok = false
+                    }
+                }
+                com.mahad.openbuddy.ui.PendingFileWrite.payload = null
+                com.mahad.openbuddy.ui.ActivityResults.backupDocumentSaved.tryEmit(ok)
+            }
+        }
+    }
+
     companion object {
         const val REQUEST_RECORD_AUDIO = 0x0B01
+        const val REQUEST_PICK_MEDIA = 0x0B02
+        const val REQUEST_PICK_BACKUP = 0x0B03
+        const val REQUEST_CREATE_BACKUP = 0x0B04
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

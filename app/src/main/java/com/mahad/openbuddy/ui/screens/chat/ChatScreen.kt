@@ -136,7 +136,6 @@ fun ChatScreen(
     onDeleteMcpServer: (String) -> Unit = {},
     // Media attachments (image/video sent with a message)
     pendingAttachment: com.mahad.openbuddy.data.media.StagedAttachment? = null,
-    onMediaPicked: (android.net.Uri) -> Unit = {},
     onClearAttachment: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -150,12 +149,9 @@ fun ChatScreen(
     var voiceLanguage by remember { mutableStateOf("en-US") } // "en-US" or "ur-PK"
     var showAgentHub by remember { mutableStateOf(false) }
 
-    // System photo/video picker for message attachments (no permission needed)
-    val mediaPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        if (uri != null) onMediaPicked(uri)
-    }
+    // Media picking runs through MainActivity's classic startActivityForResult
+    // flow (see ActivityResults) — the Compose registry launcher can crash on
+    // this FragmentActivity host. MainScreen collects the picked Uri.
 
     // Sync live voice transcript into input text field
     LaunchedEffect(voiceTranscript) {
@@ -399,11 +395,7 @@ fun ChatScreen(
                 onTextChanged = { inputText = it },
                 hasAttachment = pendingAttachment != null,
                 onAttachClick = {
-                    mediaPickerLauncher.launch(
-                        androidx.activity.result.PickVisualMediaRequest(
-                            ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                        )
-                    )
+                    (context as? com.mahad.openbuddy.MainActivity)?.launchMediaPicker()
                 },
                 onSend = {
                     if (isVoiceListening) {
