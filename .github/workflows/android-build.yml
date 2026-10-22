@@ -119,6 +119,15 @@ jobs:
                 issue_number: context.issue.number,
                 body
               });
+            } else if (context.eventName === 'push') {
+              // Branch pushes have no PR to comment on: post the failure
+              // output as a commit comment so it is readable via the API.
+              await github.rest.repos.createCommitComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: context.sha,
+                body
+              });
             }
 
       - name: Upload debug APK
