@@ -24,9 +24,29 @@ class AgentForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        // Go foreground at the earliest possible moment: the platform gives
+        // startForegroundService() callers only ~5 seconds to see a matching
+        // startForeground() before it kills the app.
+        ensureChannel()
+        goForeground("Agent is working…")
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val statusText = intent?.getStringExtra(EXTRA_STATUS) ?: "Agent is working…"
         ensureChannel()
+        goForeground(statusText)
+        return START_NOT_STICKY
+    }
+
+    /**
+     * Calls startForeground with the dataSync type, falling back to the
+     * untyped call if the platform refuses. Never swallow a failure silently:
+     * a service that never goes foreground gets the whole app killed with
+     * ForegroundServiceDidNotStartInTimeException.
+     */
+    private fun goForeground(statusText: String) {
         val notification = buildNotification(statusText)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -34,11 +54,13 @@ class AgentForegroundService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
-        } catch (_: Exception) {
-            // If the platform refuses (e.g. missing permission), the agent run
-            // continues in-process; only the background guarantee is reduced.
+        } catch (e: Exception) {
+            try {
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (e2: Exception) {
+                com.mahad.openbuddy.data.CrashReporter.record(e2)
+            }
         }
-        return START_NOT_STICKY
     }
 
     private fun ensureChannel() {

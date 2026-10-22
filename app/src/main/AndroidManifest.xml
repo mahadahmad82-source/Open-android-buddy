@@ -13,6 +13,11 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Required since targetSdk 34 to start a dataSync foreground service;
+         without it startForeground() throws SecurityException, the service
+         never goes foreground, and the system kills the app with
+         ForegroundServiceDidNotStartInTimeException. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
