@@ -197,17 +197,8 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
 
-    // Requirement 4: FLAG_SECURE protection for screens showing secrets
-    DisposableEffect(Unit) {
-        val activity = context as? Activity
-        activity?.window?.setFlags(
-            WindowManager.LayoutParams.FLAG_SECURE,
-            WindowManager.LayoutParams.FLAG_SECURE
-        )
-        onDispose {
-            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        }
-    }
+    // Screenshots allowed on all screens (owner's decision 2026-10-23 —
+    // the old FLAG_SECURE block was removed).
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     val tabs = listOf("AI Providers", "Tokens Vault", "Backup & Restore", "Security", "Privacy", "System Prompt", "Voice Actions", "Drafts")
@@ -1447,12 +1438,12 @@ private fun SecurityTab(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "FLAG_SECURE Active",
+                            text = "Screenshots Allowed",
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                             color = tokens.textPrimary
                         )
                         Text(
-                            text = "Screenshots blocked and content hidden in recent-apps switcher when viewing secrets.",
+                            text = "Screen capture is enabled on all screens so you can share errors and content freely.",
                             style = MaterialTheme.typography.bodySmall,
                             color = tokens.textSecondary
                         )

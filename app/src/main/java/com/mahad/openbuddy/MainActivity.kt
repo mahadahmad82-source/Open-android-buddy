@@ -3,7 +3,6 @@ package com.mahad.openbuddy
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.view.WindowManager
 import androidx.core.app.ActivityCompat
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -11,11 +10,8 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mahad.openbuddy.ui.screens.MainScreen
 import com.mahad.openbuddy.ui.theme.OpenBuddyTheme
 import com.mahad.openbuddy.ui.theme.GlassBackground
@@ -65,17 +61,8 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         setContent {
             OpenBuddyTheme {
-                val isAppLocked by viewModel.isAppLocked.collectAsStateWithLifecycle()
-
-                // When locked, block screenshots and recent-apps preview
-                LaunchedEffect(isAppLocked) {
-                    if (isAppLocked) {
-                        window.setFlags(
-                            WindowManager.LayoutParams.FLAG_SECURE,
-                            WindowManager.LayoutParams.FLAG_SECURE
-                        )
-                    }
-                }
+                // Screenshots intentionally allowed everywhere (owner's
+                // decision 2026-10-23 — FLAG_SECURE fully removed).
 
                 GlassBackground(modifier = Modifier.fillMaxSize()) {
                     MainScreen(viewModel = viewModel)
