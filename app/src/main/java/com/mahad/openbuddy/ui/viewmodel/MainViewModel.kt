@@ -603,11 +603,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!_handsFreeActive.value) return
         speechRecognizerHelper.onPartialResult = null
         speechRecognizerHelper.onFinalResult = { transcript ->
-            if (!_handsFreeActive.value) return@onFinalResult
-            if (transcript.isNotBlank()) {
-                onHandsFreeTranscript(transcript)
-            } else {
-                listenForHandsFree()
+            if (_handsFreeActive.value) {
+                if (transcript.isNotBlank()) {
+                    onHandsFreeTranscript(transcript)
+                } else {
+                    listenForHandsFree()
+                }
             }
         }
         speechRecognizerHelper.startListening(null)
