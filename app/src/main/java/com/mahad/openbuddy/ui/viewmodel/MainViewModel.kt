@@ -140,6 +140,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val activeGitHubFileOriginal: StateFlow<String> = gitHubRepository.activeFileOriginalContent
     val activeGitHubFileDraft: StateFlow<String> = gitHubRepository.activeFileDraftContent
     val gitHubModifiedFiles: StateFlow<Map<String, ModifiedFile>> = gitHubRepository.modifiedFiles
+    val gitHubPullRequests: StateFlow<List<com.mahad.openbuddy.data.remote.github.GitHubPullRequest>> = gitHubRepository.pullRequests
     val isGitHubReadOnly: StateFlow<Boolean> = gitHubRepository.isReadOnlyMode
     val isGitHubLoading: StateFlow<Boolean> = gitHubRepository.isLoading
     val gitHubErrorMessage: StateFlow<String?> = gitHubRepository.errorMessage
@@ -532,6 +533,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun createGitHubBranch(newBranch: String, baseBranch: String): Result<Unit> {
         return gitHubRepository.createNewBranch(newBranch, baseBranch)
+    }
+
+    // Phase 1: pull requests, delete file, new file
+
+    fun loadGitHubPullRequests() {
+        viewModelScope.launch {
+            gitHubRepository.loadPullRequests()
+        }
+    }
+
+    suspend fun createGitHubPullRequest(title: String, body: String, head: String, base: String): Result<com.mahad.openbuddy.data.remote.github.GitHubPullRequest> {
+        return gitHubRepository.createPullRequest(title, body, head, base)
+    }
+
+    suspend fun mergeGitHubPullRequest(number: Int): Result<String> {
+        return gitHubRepository.mergePullRequest(number)
+    }
+
+    suspend fun deleteGitHubFile(node: GitHubTreeNode, commitMessage: String): Result<Unit> {
+        return gitHubRepository.deleteFile(node, commitMessage)
+    }
+
+    fun stageGitHubNewFile(path: String, initialContent: String): Result<Unit> {
+        return gitHubRepository.stageNewFile(path, initialContent)
     }
 
     fun openGitHubFile(node: GitHubTreeNode) {

@@ -8,6 +8,7 @@ import com.mahad.openbuddy.data.remote.github.GitHubApiService
 import com.mahad.openbuddy.data.remote.github.GitHubBranch
 import com.mahad.openbuddy.data.remote.github.GitHubContent
 import com.mahad.openbuddy.data.remote.github.GitHubException
+import com.mahad.openbuddy.data.remote.github.GitHubPullRequest
 import com.mahad.openbuddy.data.remote.github.GitHubRepo
 import com.mahad.openbuddy.data.remote.github.GitHubTreeItem
 import com.mahad.openbuddy.data.remote.github.GitHubTreeNode
@@ -68,6 +69,10 @@ class GitHubRepository(
     // Multi-file modified staging map (Path -> ModifiedFile)
     private val _modifiedFiles = MutableStateFlow<Map<String, ModifiedFile>>(emptyMap())
     val modifiedFiles: StateFlow<Map<String, ModifiedFile>> = _modifiedFiles.asStateFlow()
+
+    // Open pull requests for the selected repository (Phase 1)
+    private val _pullRequests = MutableStateFlow<List<GitHubPullRequest>>(emptyList())
+    val pullRequests: StateFlow<List<GitHubPullRequest>> = _pullRequests.asStateFlow()
 
     // Safety: Read-only mode active by default!
     private val _isReadOnlyMode = MutableStateFlow<Boolean>(true)
@@ -147,6 +152,9 @@ class GitHubRepository(
         // Load tree for default branch
         loadTree(repo.owner.login, repo.name, repo.defaultBranch)
         _isLoading.value = false
+
+        // Load open pull requests in the background of the same selection
+        loadPullRequests()
     }
 
     suspend fun switchBranch(branchName: String) = withContext(Dispatchers.IO) {
@@ -290,12 +298,15 @@ class GitHubRepository(
 
         val currentMap = _modifiedFiles.value.toMutableMap()
         if (newText != original) {
+            // Preserve new-file staging: a file created in the app keeps isNew
+            // and its empty original sha while it is being edited.
+            val existing = currentMap[file.path]
             currentMap[file.path] = ModifiedFile(
                 path = file.path,
                 originalContent = original,
                 newContent = newText,
-                originalSha = file.sha,
-                isNew = false
+                originalSha = existing?.originalSha ?: file.sha,
+                isNew = existing?.isNew ?: false
             )
         } else {
             currentMap.remove(file.path)
@@ -532,6 +543,147 @@ class GitHubRepository(
         pushResult
     }
 
+    // ==========================================
+    // Phase 1: pull requests, delete file, new file
+    // ==========================================
+
+    suspend fun loadPullRequests(): Result<List<GitHubPullRequest>> = withContext(Dispatchers.IO) {
+        val repo = _selectedRepo.value ?: return@withContext Result.failure(GitHubException.GenericError("No repository selected"))
+        val token = secretStore.getGitHubToken() ?: return@withContext Result.failure(GitHubException.InvalidToken())
+        val result = apiService.listPullRequests(token, repo.owner.login, repo.name)
+        if (result.isSuccess) {
+            _pullRequests.value = result.getOrNull() ?: emptyList()
+        }
+        result
+    }
+
+    suspend fun createPullRequest(
+        title: String,
+        body: String,
+        head: String,
+        base: String
+    ): Result<GitHubPullRequest> = withContext(Dispatchers.IO) {
+        val repo = _selectedRepo.value ?: return@withContext Result.failure(GitHubException.GenericError("No repository selected"))
+        val token = secretStore.getGitHubToken() ?: return@withContext Result.failure(GitHubException.InvalidToken())
+        if (_isReadOnlyMode.value) {
+            return@withContext Result.failure(GitHubException.GenericError("GitHub is in Read-Only mode. Please toggle Write Mode to create a pull request."))
+        }
+        if (head == base) {
+            return@withContext Result.failure(GitHubException.GenericError("Head and base branches are the same — push commits to a different branch first."))
+        }
+        _isLoading.value = true
+        val result = apiService.createPullRequest(token, repo.owner.login, repo.name, title, body, head, base)
+        _isLoading.value = false
+        if (result.isSuccess) {
+            val created = result.getOrNull()
+            if (created != null) {
+                _pullRequests.value = listOf(created) + _pullRequests.value.filter { it.number != created.number }
+            }
+        } else {
+            _errorMessage.value = result.exceptionOrNull()?.message
+        }
+        result
+    }
+
+    suspend fun mergePullRequest(number: Int): Result<String> = withContext(Dispatchers.IO) {
+        val repo = _selectedRepo.value ?: return@withContext Result.failure(GitHubException.GenericError("No repository selected"))
+        val token = secretStore.getGitHubToken() ?: return@withContext Result.failure(GitHubException.InvalidToken())
+        if (_isReadOnlyMode.value) {
+            return@withContext Result.failure(GitHubException.GenericError("GitHub is in Read-Only mode. Please toggle Write Mode to merge."))
+        }
+        _isLoading.value = true
+        val result = apiService.mergePullRequest(token, repo.owner.login, repo.name, number)
+        _isLoading.value = false
+        if (result.isSuccess) {
+            _pullRequests.value = _pullRequests.value.filter { it.number != number }
+            // If we merged into the branch we are browsing, refresh its tree
+            loadPullRequests()
+        } else {
+            _errorMessage.value = result.exceptionOrNull()?.message
+        }
+        result
+    }
+
+    suspend fun deleteFile(node: GitHubTreeNode, commitMessage: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val repo = _selectedRepo.value ?: return@withContext Result.failure(GitHubException.GenericError("No repository selected"))
+        val token = secretStore.getGitHubToken() ?: return@withContext Result.failure(GitHubException.InvalidToken())
+        if (_isReadOnlyMode.value) {
+            return@withContext Result.failure(GitHubException.GenericError("GitHub is in Read-Only mode. Please toggle Write Mode to delete files."))
+        }
+        if (node.sha.isBlank()) {
+            return@withContext Result.failure(GitHubException.GenericError("File sha missing — refresh the repository and try again."))
+        }
+        _isLoading.value = true
+        _errorMessage.value = null
+        val result = apiService.deleteFile(
+            token = token,
+            owner = repo.owner.login,
+            repo = repo.name,
+            path = node.fullPath,
+            sha = node.sha,
+            branch = _selectedBranch.value,
+            message = commitMessage
+        )
+        _isLoading.value = false
+        if (result.isSuccess) {
+            // Drop any staged edits for the deleted file and close it if open
+            if (_modifiedFiles.value.containsKey(node.fullPath)) {
+                _modifiedFiles.value = _modifiedFiles.value - node.fullPath
+            }
+            if (_activeFile.value?.path == node.fullPath) {
+                closeActiveFile()
+            }
+            loadTree(repo.owner.login, repo.name, _selectedBranch.value)
+        } else {
+            _errorMessage.value = result.exceptionOrNull()?.message
+        }
+        result
+    }
+
+    /**
+     * Stages a brand-new file locally and opens it in the editor. Nothing is
+     * sent to GitHub until the user commits through the normal review flow.
+     */
+    fun stageNewFile(path: String, initialContent: String): Result<Unit> {
+        val clean = path.trim().trimStart('/')
+        if (clean.isBlank() || clean.split("/").any { it == ".." || it.isBlank() }) {
+            return Result.failure(GitHubException.GenericError("Enter a valid file path, e.g. docs/notes.md"))
+        }
+        if (_modifiedFiles.value.containsKey(clean)) {
+            return Result.failure(GitHubException.GenericError("'$clean' is already staged — open it from the changes list."))
+        }
+        if (treeContainsPath(_treeRoot.value, clean)) {
+            return Result.failure(GitHubException.GenericError("'$clean' already exists on this branch. Open it from the file list to edit it."))
+        }
+        _modifiedFiles.value = _modifiedFiles.value + (clean to ModifiedFile(
+            path = clean,
+            originalContent = "",
+            newContent = initialContent,
+            originalSha = "",
+            isNew = true
+        ))
+        _activeFile.value = GitHubContent(
+            name = clean.substringAfterLast('/'),
+            path = clean,
+            sha = "",
+            size = 0L,
+            type = "file",
+            content = null,
+            encoding = null,
+            downloadUrl = null,
+            htmlUrl = null
+        )
+        _activeFileOriginalContent.value = ""
+        _activeFileDraftContent.value = initialContent
+        return Result.success(Unit)
+    }
+
+    private fun treeContainsPath(node: GitHubTreeNode?, path: String): Boolean {
+        if (node == null) return false
+        if (node.fullPath == path) return true
+        return node.children.any { treeContainsPath(it, path) }
+    }
+
     fun closeActiveFile() {
         _activeFile.value = null
         _activeFileOriginalContent.value = ""
@@ -542,6 +694,7 @@ class GitHubRepository(
         _selectedRepo.value = null
         _selectedBranch.value = "main"
         _branches.value = emptyList()
+        _pullRequests.value = emptyList()
         _treeRoot.value = null
         closeActiveFile()
     }

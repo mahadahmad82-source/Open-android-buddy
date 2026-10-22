@@ -180,6 +180,43 @@ data class GitHubCommitResponse(
     val htmlUrl: String?
 )
 
+data class GitHubPullRequest(
+    val number: Int,
+    val title: String,
+    val body: String?,
+    val state: String,
+    val isDraft: Boolean,
+    val isMerged: Boolean,
+    val headRef: String,
+    val headSha: String,
+    val baseRef: String,
+    val authorLogin: String,
+    val htmlUrl: String?,
+    val createdAt: String?
+) {
+    companion object {
+        fun fromJson(json: JSONObject): GitHubPullRequest {
+            val head = json.optJSONObject("head")
+            val base = json.optJSONObject("base")
+            val user = json.optJSONObject("user")
+            return GitHubPullRequest(
+                number = json.optInt("number", 0),
+                title = json.optString("title", ""),
+                body = json.optString("body").ifBlank { null },
+                state = json.optString("state", "open"),
+                isDraft = json.optBoolean("draft", false),
+                isMerged = json.optBoolean("merged", false) || !json.isNull("merged_at"),
+                headRef = head?.optString("ref", "") ?: "",
+                headSha = head?.optString("sha", "") ?: "",
+                baseRef = base?.optString("ref", "") ?: "",
+                authorLogin = user?.optString("login", "") ?: "",
+                htmlUrl = json.optString("html_url").ifBlank { null },
+                createdAt = json.optString("created_at").ifBlank { null }
+            )
+        }
+    }
+}
+
 data class GitHubTreeNode(
     val name: String,
     val fullPath: String,

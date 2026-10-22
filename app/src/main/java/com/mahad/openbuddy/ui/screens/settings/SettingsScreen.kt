@@ -2201,9 +2201,33 @@ private fun GitHubTokenDialog(
                             color = tokens.accentViolet
                         )
                         Text(
-                            text = "Use a GitHub Fine-Grained Personal Access Token with 'Repository permissions: Contents (Read and write)'.",
+                            text = "Use a GitHub Fine-Grained Personal Access Token with repository permissions: Contents (Read and write) and Pull requests (Read and write).",
                             style = MaterialTheme.typography.bodySmall,
                             color = tokens.textPrimary
+                        )
+                    }
+                }
+
+                // Step-by-step setup guide (Phase 1 wizard)
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    fillColor = tokens.glassFill,
+                    borderStroke = tokens.glassBorderStroke
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "How to create one (2 minutes)",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = tokens.textPrimary
+                        )
+                        Text(
+                            text = "1. On github.com, open your profile menu → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token.\n" +
+                                "2. Give it a name (e.g. \"Open Buddy\") and an expiration.\n" +
+                                "3. Repository access: pick the repositories Open Buddy may use (or All repositories).\n" +
+                                "4. Permissions → Repository permissions: set Contents = Read and write, and Pull requests = Read and write.\n" +
+                                "5. Tap Generate token, copy it, paste it below and tap Validate.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = tokens.textSecondary
                         )
                     }
                 }

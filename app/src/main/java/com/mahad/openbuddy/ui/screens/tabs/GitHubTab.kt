@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Commit
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
@@ -51,6 +52,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -115,6 +117,7 @@ import com.mahad.openbuddy.data.remote.github.DiffItem
 import com.mahad.openbuddy.data.remote.github.DiffLineType
 import com.mahad.openbuddy.data.remote.github.GitHubBranch
 import com.mahad.openbuddy.data.remote.github.GitHubContent
+import com.mahad.openbuddy.data.remote.github.GitHubPullRequest
 import com.mahad.openbuddy.data.remote.github.GitHubRepo
 import com.mahad.openbuddy.data.remote.github.GitHubTreeNode
 import com.mahad.openbuddy.data.remote.github.GitHubUser
@@ -157,6 +160,7 @@ fun GitHubTab(
     val originalContent by viewModel.activeGitHubFileOriginal.collectAsStateWithLifecycle()
     val draftContent by viewModel.activeGitHubFileDraft.collectAsStateWithLifecycle()
     val modifiedFiles by viewModel.gitHubModifiedFiles.collectAsStateWithLifecycle()
+    val pullRequests by viewModel.gitHubPullRequests.collectAsStateWithLifecycle()
     val isReadOnly by viewModel.isGitHubReadOnly.collectAsStateWithLifecycle()
     val isLoading by viewModel.isGitHubLoading.collectAsStateWithLifecycle()
     val errorMessage by viewModel.gitHubErrorMessage.collectAsStateWithLifecycle()
@@ -165,6 +169,9 @@ fun GitHubTab(
     var showCommitSheet by remember { mutableStateOf(false) }
     var showPushConfirmationDialog by remember { mutableStateOf(false) }
     var showNewBranchDialog by remember { mutableStateOf(false) }
+    var showNewFileDialog by remember { mutableStateOf(false) }
+    var showPullRequestsDialog by remember { mutableStateOf(false) }
+    var filePendingDelete by remember { mutableStateOf<GitHubTreeNode?>(null) }
     var showAiDiffModal by remember { mutableStateOf(false) }
     var aiProposedCode by remember { mutableStateOf("") }
     var aiDiffItems by remember { mutableStateOf<List<DiffItem>>(emptyList()) }
@@ -274,7 +281,14 @@ fun GitHubTab(
                     selectedBranch = selectedBranch,
                     isLoading = isLoading,
                     modifiedFiles = modifiedFiles,
-                    onOpenFile = { node -> viewModel.openGitHubFile(node) }
+                    pullRequestCount = pullRequests.size,
+                    onOpenFile = { node -> viewModel.openGitHubFile(node) },
+                    onNewFileClick = { showNewFileDialog = true },
+                    onOpenPullRequests = {
+                        viewModel.loadGitHubPullRequests()
+                        showPullRequestsDialog = true
+                    },
+                    onDeleteFile = { node -> filePendingDelete = node }
                 )
             } else {
                 // File Viewer & Editor View
@@ -446,6 +460,81 @@ fun GitHubTab(
                         snackbarHostState.showSnackbar("Successfully pushed commit to GitHub (${result.getOrNull()?.take(7)})")
                     } else {
                         snackbarHostState.showSnackbar("Push failed: ${result.exceptionOrNull()?.message}")
+                    }
+                }
+            }
+        )
+    }
+
+    // Phase 1: New File Dialog (stages locally, pushed via the commit flow)
+    if (showNewFileDialog) {
+        NewFileDialog(
+            onDismiss = { showNewFileDialog = false },
+            onCreate = { path, content ->
+                showNewFileDialog = false
+                val result = viewModel.stageGitHubNewFile(path, content)
+                scope.launch {
+                    if (result.isSuccess) {
+                        snackbarHostState.showSnackbar("New file staged — edit it, then Commit to push")
+                    } else {
+                        snackbarHostState.showSnackbar(result.exceptionOrNull()?.message ?: "Could not stage file")
+                    }
+                }
+            }
+        )
+    }
+
+    // Phase 1: Delete File Confirmation
+    if (filePendingDelete != null) {
+        val nodeToDelete = filePendingDelete!!
+        DeleteFileDialog(
+            filePath = nodeToDelete.fullPath,
+            branch = selectedBranch,
+            onDismiss = { filePendingDelete = null },
+            onConfirmDelete = {
+                filePendingDelete = null
+                scope.launch {
+                    val result = viewModel.deleteGitHubFile(nodeToDelete, "Delete ${nodeToDelete.fullPath} via Open Buddy")
+                    if (result.isSuccess) {
+                        snackbarHostState.showSnackbar("Deleted ${nodeToDelete.name} from $selectedBranch")
+                    } else {
+                        snackbarHostState.showSnackbar("Delete failed: ${result.exceptionOrNull()?.message}")
+                    }
+                }
+            }
+        )
+    }
+
+    // Phase 1: Pull Requests Panel
+    if (showPullRequestsDialog && selectedRepo != null) {
+        PullRequestsDialog(
+            repo = selectedRepo!!,
+            pullRequests = pullRequests,
+            branches = branches,
+            currentBranch = selectedBranch,
+            isReadOnly = isReadOnly,
+            onDismiss = { showPullRequestsDialog = false },
+            onRefresh = { viewModel.loadGitHubPullRequests() },
+            onCreate = { title, body, head, base ->
+                scope.launch {
+                    val result = viewModel.createGitHubPullRequest(title, body, head, base)
+                    if (result.isSuccess) {
+                        snackbarHostState.showSnackbar("Pull request #${result.getOrNull()?.number} created")
+                    } else {
+                        snackbarHostState.showSnackbar("Create PR failed: ${result.exceptionOrNull()?.message}")
+                    }
+                }
+            },
+            onMerge = { number ->
+                scope.launch {
+                    val result = viewModel.mergeGitHubPullRequest(number)
+                    if (result.isSuccess) {
+                        snackbarHostState.showSnackbar("Pull request #$number merged")
+                        if (selectedRepo != null) {
+                            viewModel.switchGitHubBranch(selectedBranch)
+                        }
+                    } else {
+                        snackbarHostState.showSnackbar("Merge failed: ${result.exceptionOrNull()?.message}")
                     }
                 }
             }
@@ -1034,7 +1123,11 @@ private fun RepoExplorerView(
     selectedBranch: String,
     isLoading: Boolean,
     modifiedFiles: Map<String, ModifiedFile>,
-    onOpenFile: (GitHubTreeNode) -> Unit
+    pullRequestCount: Int,
+    onOpenFile: (GitHubTreeNode) -> Unit,
+    onNewFileClick: () -> Unit,
+    onOpenPullRequests: () -> Unit,
+    onDeleteFile: (GitHubTreeNode) -> Unit
 ) {
     val tokens = GlassTheme.tokens
 
@@ -1076,6 +1169,29 @@ private fun RepoExplorerView(
             }
         }
 
+        // Phase 1 actions: new file + pull requests
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AssistChip(
+                onClick = onNewFileClick,
+                label = { Text("New file", fontSize = 12.sp) },
+                leadingIcon = {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
+                }
+            )
+            AssistChip(
+                onClick = onOpenPullRequests,
+                label = { Text("Pull requests ($pullRequestCount)", fontSize = 12.sp) },
+                leadingIcon = {
+                    Icon(Icons.Default.AltRoute, contentDescription = null, modifier = Modifier.size(15.dp))
+                }
+            )
+        }
+
         if (isLoading && (treeRoot == null || treeRoot.children.isEmpty())) {
             ShimmerListSkeleton(
                 itemCount = 6,
@@ -1103,7 +1219,8 @@ private fun RepoExplorerView(
                         node = childNode,
                         depth = 0,
                         modifiedFiles = modifiedFiles,
-                        onOpenFile = onOpenFile
+                        onOpenFile = onOpenFile,
+                        onDeleteFile = onDeleteFile
                     )
                 }
             }
@@ -1116,10 +1233,12 @@ private fun TreeNodeItem(
     node: GitHubTreeNode,
     depth: Int,
     modifiedFiles: Map<String, ModifiedFile>,
-    onOpenFile: (GitHubTreeNode) -> Unit
+    onOpenFile: (GitHubTreeNode) -> Unit,
+    onDeleteFile: (GitHubTreeNode) -> Unit
 ) {
     val tokens = GlassTheme.tokens
     var isExpanded by remember { mutableStateOf(node.isExpanded) }
+    var showNodeMenu by remember { mutableStateOf(false) }
     val isModified = modifiedFiles.containsKey(node.fullPath)
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -1188,6 +1307,41 @@ private fun TreeNodeItem(
                         color = tokens.textSecondary
                     )
                 }
+
+                // Phase 1: per-file overflow menu (delete)
+                if (!node.isDirectory) {
+                    Box {
+                        IconButton(
+                            onClick = { showNodeMenu = true },
+                            modifier = Modifier.size(26.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = "File actions",
+                                tint = tokens.textSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showNodeMenu,
+                            onDismissRequest = { showNodeMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Delete, contentDescription = null, tint = SemanticError, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Delete file", color = SemanticError, fontSize = 12.5.sp)
+                                    }
+                                },
+                                onClick = {
+                                    showNodeMenu = false
+                                    onDeleteFile(node)
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -1197,7 +1351,8 @@ private fun TreeNodeItem(
                     node = subNode,
                     depth = depth + 1,
                     modifiedFiles = modifiedFiles,
-                    onOpenFile = onOpenFile
+                    onOpenFile = onOpenFile,
+                    onDeleteFile = onDeleteFile
                 )
             }
         }
@@ -2009,5 +2164,337 @@ private fun formatFileSize(bytes: Long): String {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
         else -> "${String.format("%.1f", bytes / (1024.0 * 1024.0))} MB"
+    }
+}
+
+// ============================================================================
+// Phase 1: New File Dialog
+// ============================================================================
+
+@Composable
+private fun NewFileDialog(
+    onDismiss: () -> Unit,
+    onCreate: (String, String) -> Unit
+) {
+    var filePath by remember { mutableStateOf("") }
+    var initialContent by remember { mutableStateOf("") }
+    val tokens = GlassTheme.tokens
+
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = "Create New File",
+        icon = Icons.Default.Add,
+        iconTint = tokens.accentCyan,
+        message = "The file is staged locally and opens in the editor. It reaches GitHub only when you commit.",
+        confirmButtonText = "Create & Edit",
+        confirmButtonEnabled = filePath.isNotBlank(),
+        onConfirm = { onCreate(filePath.trim(), initialContent) },
+        confirmTestTag = "confirm_new_file_button",
+        dismissButtonText = "Cancel",
+        content = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                GlassTextField(
+                    value = filePath,
+                    onValueChange = { filePath = it },
+                    placeholder = "Path, e.g. docs/notes.md",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("new_file_path_input")
+                )
+                GlassTextField(
+                    value = initialContent,
+                    onValueChange = { initialContent = it },
+                    placeholder = "Initial content (optional)",
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    )
+}
+
+// ============================================================================
+// Phase 1: Delete File Confirmation Dialog
+// ============================================================================
+
+@Composable
+private fun DeleteFileDialog(
+    filePath: String,
+    branch: String,
+    onDismiss: () -> Unit,
+    onConfirmDelete: () -> Unit
+) {
+    val tokens = GlassTheme.tokens
+
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = "Delete File?",
+        icon = Icons.Default.Delete,
+        iconTint = SemanticError,
+        message = "'$filePath' will be deleted from branch '$branch' with its own commit. This cannot be undone from the app (GitHub keeps the history).",
+        confirmButtonText = "Delete File",
+        confirmButtonEnabled = true,
+        isDestructive = true,
+        onConfirm = onConfirmDelete,
+        confirmTestTag = "confirm_delete_file_button",
+        dismissButtonText = "Cancel",
+        content = {}
+    )
+}
+
+// ============================================================================
+// Phase 1: Pull Requests Panel
+// ============================================================================
+
+@Composable
+private fun PullRequestsDialog(
+    repo: GitHubRepo,
+    pullRequests: List<GitHubPullRequest>,
+    branches: List<GitHubBranch>,
+    currentBranch: String,
+    isReadOnly: Boolean,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onCreate: (String, String, String, String) -> Unit,
+    onMerge: (Int) -> Unit
+) {
+    val tokens = GlassTheme.tokens
+    var showCreateForm by remember { mutableStateOf(false) }
+    var prTitle by remember { mutableStateOf("") }
+    var prBody by remember { mutableStateOf("") }
+    var prHead by remember { mutableStateOf(currentBranch) }
+    var prBase by remember { mutableStateOf(repo.defaultBranch) }
+    var confirmMergeNumber by remember { mutableStateOf<Int?>(null) }
+    var baseMenuExpanded by remember { mutableStateOf(false) }
+    var headMenuExpanded by remember { mutableStateOf(false) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        GlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.88f),
+            fillColor = tokens.backgroundEnd.copy(alpha = 0.96f)
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AltRoute, contentDescription = null, tint = tokens.accentViolet, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("Pull Requests", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold), color = tokens.textPrimary)
+                            Text(repo.fullName, style = CodeTextStyle.copy(fontSize = 11.sp), color = tokens.textSecondary)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onRefresh, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh pull requests", tint = tokens.textSecondary, modifier = Modifier.size(17.dp))
+                        }
+                        IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = tokens.textSecondary)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                if (showCreateForm) {
+                    // Create PR form
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        GlassTextField(
+                            value = prTitle,
+                            onValueChange = { prTitle = it },
+                            placeholder = "Pull request title",
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        GlassTextField(
+                            value = prBody,
+                            onValueChange = { prBody = it },
+                            placeholder = "Description (optional)",
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = tokens.glassFillStrong,
+                                    border = tokens.glassBorderStroke,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { headMenuExpanded = true }
+                                ) {
+                                    Text(
+                                        text = "From: $prHead",
+                                        style = CodeTextStyle.copy(fontSize = 11.5.sp),
+                                        color = tokens.textPrimary,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                DropdownMenu(expanded = headMenuExpanded, onDismissRequest = { headMenuExpanded = false }) {
+                                    branches.forEach { branch ->
+                                        DropdownMenuItem(
+                                            text = { Text(branch.name, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                                            onClick = { prHead = branch.name; headMenuExpanded = false }
+                                        )
+                                    }
+                                }
+                            }
+                            Box(modifier = Modifier.weight(1f)) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = tokens.glassFillStrong,
+                                    border = tokens.glassBorderStroke,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { baseMenuExpanded = true }
+                                ) {
+                                    Text(
+                                        text = "Into: $prBase",
+                                        style = CodeTextStyle.copy(fontSize = 11.5.sp),
+                                        color = tokens.textPrimary,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                DropdownMenu(expanded = baseMenuExpanded, onDismissRequest = { baseMenuExpanded = false }) {
+                                    branches.forEach { branch ->
+                                        DropdownMenuItem(
+                                            text = { Text(branch.name, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                                            onClick = { prBase = branch.name; baseMenuExpanded = false }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (isReadOnly) {
+                            Text(
+                                text = "GitHub is in Read-Only mode — switch to Write Enabled to create the pull request.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = SemanticError
+                            )
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { showCreateForm = false },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Back")
+                            }
+                            GradientButton(
+                                text = "Create PR",
+                                onClick = {
+                                    onCreate(prTitle.trim(), prBody.trim(), prHead, prBase)
+                                    showCreateForm = false
+                                    prTitle = ""
+                                    prBody = ""
+                                },
+                                enabled = prTitle.isNotBlank() && prHead != prBase,
+                                modifier = Modifier.weight(1f),
+                                testTag = "create_pr_confirm_button"
+                            )
+                        }
+                    }
+                } else {
+                    // PR list
+                    if (pullRequests.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No open pull requests.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = tokens.textSecondary
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(pullRequests) { pr ->
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = tokens.glassFill,
+                                    border = tokens.glassBorderStroke,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = "#${pr.number}  ${pr.title}",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            color = tokens.textPrimary,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "${pr.headRef}  →  ${pr.baseRef}   •   @${pr.authorLogin}${if (pr.isDraft) "   •   Draft" else ""}",
+                                            style = CodeTextStyle.copy(fontSize = 11.sp),
+                                            color = tokens.textSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                                            if (confirmMergeNumber == pr.number) {
+                                                TextButton(onClick = { confirmMergeNumber = null }) {
+                                                    Text("Cancel", fontSize = 12.sp)
+                                                }
+                                                GradientButton(
+                                                    text = "Confirm Merge",
+                                                    onClick = {
+                                                        confirmMergeNumber = null
+                                                        onMerge(pr.number)
+                                                    },
+                                                    enabled = !isReadOnly,
+                                                    testTag = "confirm_merge_pr_${pr.number}"
+                                                )
+                                            } else {
+                                                OutlinedButton(
+                                                    onClick = { confirmMergeNumber = pr.number },
+                                                    enabled = !pr.isDraft && !isReadOnly
+                                                ) {
+                                                    Text("Merge", fontSize = 12.sp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    GradientButton(
+                        text = "New Pull Request",
+                        onClick = {
+                            prHead = currentBranch
+                            prBase = repo.defaultBranch
+                            showCreateForm = true
+                        },
+                        leadingIcon = Icons.Default.Add,
+                        modifier = Modifier.fillMaxWidth(),
+                        testTag = "new_pr_button"
+                    )
+                }
+            }
+        }
     }
 }

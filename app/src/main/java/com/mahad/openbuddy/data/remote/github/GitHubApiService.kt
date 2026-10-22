@@ -515,4 +515,148 @@ class GitHubApiService {
             Result.failure(e)
         }
     }
+
+    // ==========================================
+    // Phase 1: delete file + pull requests
+    // ==========================================
+
+    suspend fun deleteFile(
+        token: String,
+        owner: String,
+        repo: String,
+        path: String,
+        sha: String,
+        branch: String,
+        message: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val encodedPath = path.trimStart('/').split("/").joinToString("/") { java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
+            val payload = JSONObject().apply {
+                put("message", message.trim().ifBlank { "Delete $path via Open Buddy" })
+                put("sha", sha)
+                put("branch", branch)
+            }
+            val request = buildRequest(token, "/repos/$owner/$repo/contents/$encodedPath", method = "DELETE", bodyJson = payload.toString())
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    Result.success(Unit)
+                } else {
+                    Result.failure(handleHttpError(response, body))
+                }
+            }
+        } catch (e: IOException) {
+            Result.failure(GitHubException.NetworkError("Network error: ${e.message}"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun listPullRequests(
+        token: String,
+        owner: String,
+        repo: String,
+        state: String = "open"
+    ): Result<List<GitHubPullRequest>> = withContext(Dispatchers.IO) {
+        try {
+            val pulls = mutableListOf<GitHubPullRequest>()
+            var page = 1
+            while (page <= 5) {
+                val request = buildRequest(token, "/repos/$owner/$repo/pulls?state=$state&per_page=100&page=$page&sort=updated&direction=desc")
+                var pageCount = 0
+                val pageOk = client.newCall(request).execute().use { response ->
+                    val body = response.body?.string() ?: ""
+                    if (response.isSuccessful) {
+                        val array = JSONArray(body)
+                        pageCount = array.length()
+                        for (i in 0 until array.length()) {
+                            val prObj = array.optJSONObject(i)
+                            if (prObj != null) {
+                                pulls.add(GitHubPullRequest.fromJson(prObj))
+                            }
+                        }
+                        true
+                    } else {
+                        if (page == 1) {
+                            return@withContext Result.failure(handleHttpError(response, body))
+                        }
+                        false
+                    }
+                }
+                if (!pageOk || pageCount < 100) break
+                page++
+            }
+            Result.success(pulls)
+        } catch (e: IOException) {
+            Result.failure(GitHubException.NetworkError("Network error: ${e.message}"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createPullRequest(
+        token: String,
+        owner: String,
+        repo: String,
+        title: String,
+        body: String,
+        head: String,
+        base: String,
+        draft: Boolean = false
+    ): Result<GitHubPullRequest> = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().apply {
+                put("title", title.trim())
+                put("body", body)
+                put("head", head)
+                put("base", base)
+                put("draft", draft)
+            }
+            val request = buildRequest(token, "/repos/$owner/$repo/pulls", method = "POST", bodyJson = payload.toString())
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                if (response.isSuccessful || response.code == 201) {
+                    Result.success(GitHubPullRequest.fromJson(JSONObject(responseBody)))
+                } else {
+                    Result.failure(handleHttpError(response, responseBody))
+                }
+            }
+        } catch (e: IOException) {
+            Result.failure(GitHubException.NetworkError("Network error: ${e.message}"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun mergePullRequest(
+        token: String,
+        owner: String,
+        repo: String,
+        number: Int,
+        mergeMethod: String = "merge"
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().apply {
+                put("merge_method", mergeMethod)
+            }
+            val request = buildRequest(token, "/repos/$owner/$repo/pulls/$number/merge", method = "PUT", bodyJson = payload.toString())
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val json = JSONObject(responseBody)
+                    if (json.optBoolean("merged", false)) {
+                        Result.success(json.optString("sha", ""))
+                    } else {
+                        Result.failure(GitHubException.GenericError(json.optString("message", "Pull request could not be merged.")))
+                    }
+                } else {
+                    Result.failure(handleHttpError(response, responseBody))
+                }
+            }
+        } catch (e: IOException) {
+            Result.failure(GitHubException.NetworkError("Network error: ${e.message}"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }
