@@ -340,29 +340,72 @@ fun main() {
         // Zero-config: a blank model name is fine. Fetch the provider's live model
         // list with the API key and auto-pick a sensible default, so the user only
         // ever has to paste a key. Falls back to the provider type's default model.
+        //
+        // Universal detection: with AUTO_DETECT (or when the chosen platform does
+        // not accept the key), the key itself is probed against every known
+        // provider — Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, OpenAI,
+        // Claude, Gemini, … — and the provider that confirms it wins, so ANY
+        // provider's API key works without manual platform/base-URL setup.
         val cleanBaseUrl = baseUrl?.trim()?.ifBlank { null }
+        var resolvedType = type
+        var resolvedBaseUrl = cleanBaseUrl
+        var resolvedName = name.trim()
         var resolvedModel = modelName.trim()
-        if (resolvedModel.isBlank()) {
-            val keyForFetch = apiKey?.trim()?.ifBlank { null }
-                ?: secretStore.getApiKey(providerId)
-            resolvedModel = if (!keyForFetch.isNullOrBlank()) {
+        val keyForFetch = apiKey?.trim()?.ifBlank { null }
+            ?: secretStore.getApiKey(providerId)
+
+        if (!keyForFetch.isNullOrBlank() && (type == ProviderType.AUTO_DETECT || resolvedModel.isBlank())) {
+            var detected: com.mahad.openbuddy.data.provider.DetectedProvider? = null
+            if (type == ProviderType.AUTO_DETECT) {
+                detected = com.mahad.openbuddy.data.provider.ProviderDetector.detect(keyForFetch).getOrNull()
+            } else {
                 val models = com.mahad.openbuddy.data.provider.ModelCatalog
                     .fetchModels(type, cleanBaseUrl, keyForFetch)
                     .getOrNull()
-                models?.let {
-                    com.mahad.openbuddy.data.provider.ModelCatalog.pickDefaultModel(type, it)
-                } ?: type.defaultModel
-            } else {
-                type.defaultModel
+                if (models != null) {
+                    resolvedModel = com.mahad.openbuddy.data.provider.ModelCatalog
+                        .pickDefaultModel(type, models) ?: type.defaultModel
+                } else {
+                    // The chosen platform rejected the key — the user probably
+                    // picked the wrong platform. Detect the real provider.
+                    detected = com.mahad.openbuddy.data.provider.ProviderDetector.detect(keyForFetch).getOrNull()
+                }
             }
+            if (detected != null) {
+                resolvedType = detected.type
+                resolvedBaseUrl = detected.baseUrl ?: resolvedBaseUrl
+                if (resolvedModel.isBlank()) resolvedModel = detected.defaultModel
+                if (resolvedName.isBlank() || resolvedName == ProviderType.AUTO_DETECT.displayName ||
+                    resolvedName == type.displayName
+                ) {
+                    resolvedName = detected.displayName
+                }
+            }
+        }
+        if (resolvedModel.isBlank()) {
+            resolvedModel = if (resolvedType == ProviderType.AUTO_DETECT) {
+                ProviderType.CUSTOM_OPENAI.defaultModel
+            } else {
+                resolvedType.defaultModel
+            }
+        }
+        // Never persist AUTO_DETECT itself: chat needs a concrete provider.
+        if (resolvedType == ProviderType.AUTO_DETECT) {
+            resolvedType = ProviderType.CUSTOM_OPENAI
+            if (resolvedBaseUrl.isNullOrBlank()) {
+                resolvedBaseUrl = ProviderType.CUSTOM_OPENAI.defaultBaseUrl
+            }
+        }
+        if (resolvedName.isBlank() || resolvedName == ProviderType.AUTO_DETECT.displayName) {
+            resolvedName = resolvedType.displayName
         }
 
         val entity = AiProviderEntity(
             id = providerId,
-            name = name.trim(),
-            type = type.name,
+            name = resolvedName,
+            type = resolvedType.name,
             modelName = resolvedModel,
-            baseUrl = cleanBaseUrl,
+            baseUrl = resolvedBaseUrl,
             isDefault = markDefault,
             createdAt = System.currentTimeMillis()
         )
@@ -401,11 +444,24 @@ fun main() {
         baseUrl: String?,
         apiKey: String
     ): Result<String> = withContext(Dispatchers.IO) {
-        // Zero-config: testing with a blank model auto-resolves one from the live list.
+        // Universal detection: with AUTO_DETECT, first find out which provider
+        // this key belongs to, then test against that provider for real.
+        var resolvedType = type
+        var resolvedBaseUrl = baseUrl?.trim()?.ifBlank { null }
         var resolvedModel = modelName.trim()
-        if (resolvedModel.isBlank() && apiKey.isNotBlank()) {
+        var detectedNote: String? = null
+        if (type == ProviderType.AUTO_DETECT) {
+            val detected = com.mahad.openbuddy.data.provider.ProviderDetector
+                .detect(apiKey)
+                .getOrElse { return@withContext Result.failure(it) }
+            resolvedType = detected.type
+            resolvedBaseUrl = detected.baseUrl
+            if (resolvedModel.isBlank()) resolvedModel = detected.defaultModel
+            detectedNote = "Detected: ${detected.displayName} (${detected.models.size} models available, using $resolvedModel). "
+        } else if (resolvedModel.isBlank() && apiKey.isNotBlank()) {
+            // Zero-config: testing with a blank model auto-resolves one from the live list.
             val models = com.mahad.openbuddy.data.provider.ModelCatalog
-                .fetchModels(type, baseUrl?.trim()?.ifBlank { null }, apiKey.trim())
+                .fetchModels(type, resolvedBaseUrl, apiKey.trim())
                 .getOrNull()
             resolvedModel = models?.let {
                 com.mahad.openbuddy.data.provider.ModelCatalog.pickDefaultModel(type, it)
@@ -413,14 +469,19 @@ fun main() {
         }
         val tempConfig = AiProviderConfig(
             id = "test_temp_id",
-            name = type.displayName,
-            type = type,
+            name = resolvedType.displayName,
+            type = resolvedType,
             modelName = resolvedModel,
-            baseUrl = baseUrl,
+            baseUrl = resolvedBaseUrl,
             isDefault = false
         )
         val provider = providerFactory.createProviderWithCustomKey(tempConfig, apiKey)
-        provider.testConnection()
+        val result = provider.testConnection()
+        if (detectedNote != null && result.isSuccess) {
+            Result.success(detectedNote + (result.getOrNull() ?: "Connection verified."))
+        } else {
+            result
+        }
     }
 
     suspend fun updateSystemPrompt(prompt: String) = withContext(Dispatchers.IO) {

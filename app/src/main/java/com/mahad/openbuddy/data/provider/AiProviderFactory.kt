@@ -22,6 +22,12 @@ class AiProviderFactory(
                 config = config,
                 apiKey = apiKey
             )
+            // AUTO_DETECT is resolved to a concrete provider before saving;
+            // this branch is only a safety net and behaves like OpenAI-compatible.
+            ProviderType.AUTO_DETECT -> OpenAiCompatibleProvider(
+                config = config,
+                apiKey = apiKey
+            )
         }
     }
 
@@ -36,6 +42,10 @@ class AiProviderFactory(
                 apiKey = customKey
             )
             ProviderType.CUSTOM_OPENAI -> OpenAiCompatibleProvider(
+                config = config,
+                apiKey = customKey
+            )
+            ProviderType.AUTO_DETECT -> OpenAiCompatibleProvider(
                 config = config,
                 apiKey = customKey
             )

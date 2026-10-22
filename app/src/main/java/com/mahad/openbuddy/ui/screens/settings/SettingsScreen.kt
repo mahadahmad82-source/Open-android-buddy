@@ -2700,7 +2700,10 @@ private fun ProviderEditorDialog(
     val tokens = GlassTheme.tokens
 
     var name by remember { mutableStateOf(initialProvider?.name ?: "") }
-    var selectedType by remember { mutableStateOf(initialProvider?.type ?: ProviderType.GEMINI) }
+    // New providers default to Auto-detect: paste ANY provider's API key
+    // (Mistral, Groq, OpenRouter, DeepSeek, xAI, OpenAI, Claude, Gemini, …)
+    // and the app identifies the provider and picks a model itself.
+    var selectedType by remember { mutableStateOf(initialProvider?.type ?: ProviderType.AUTO_DETECT) }
     // Blank by default for new providers: the model is auto-picked from the API key.
     var modelName by remember { mutableStateOf(initialProvider?.modelName ?: "") }
     var baseUrl by remember { mutableStateOf(initialProvider?.baseUrl ?: (selectedType.defaultBaseUrl ?: "")) }
@@ -2885,6 +2888,7 @@ private fun ProviderEditorDialog(
                     ProviderType.CLAUDE -> listOf("claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022")
                     ProviderType.KIMI -> listOf("moonshot-v1-8k", "moonshot-v1-32k")
                     ProviderType.CUSTOM_OPENAI -> listOf("gpt-4o", "deepseek-chat")
+                    ProviderType.AUTO_DETECT -> emptyList()
                 }
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2899,8 +2903,23 @@ private fun ProviderEditorDialog(
                     }
                 }
 
-                // Base URL Input (Custom OpenAI or Kimi)
-                if (selectedType == ProviderType.CUSTOM_OPENAI || selectedType == ProviderType.KIMI) {
+                // Auto-detect explainer
+                if (selectedType == ProviderType.AUTO_DETECT) {
+                    GlassCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        fillColor = tokens.accentViolet.copy(alpha = 0.12f),
+                        borderStroke = BorderStroke(1.dp, tokens.accentViolet.copy(alpha = 0.3f))
+                    ) {
+                        Text(
+                            text = "Paste any provider's API key — Mistral, Groq, OpenRouter, DeepSeek, xAI, Together, Fireworks, Cerebras, Moonshot/Kimi, OpenAI, Claude or Gemini. Open Buddy detects the provider from the key, fetches its models and picks the best default automatically. No platform or model selection needed.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = tokens.textPrimary
+                        )
+                    }
+                }
+
+                // Base URL Input (Custom OpenAI, Kimi, or optional Auto-detect override)
+                if (selectedType == ProviderType.CUSTOM_OPENAI || selectedType == ProviderType.KIMI || selectedType == ProviderType.AUTO_DETECT) {
                     GlassTextField(
                         value = baseUrl,
                         onValueChange = { baseUrl = it },

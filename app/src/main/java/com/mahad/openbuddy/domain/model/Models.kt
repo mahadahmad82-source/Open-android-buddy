@@ -6,6 +6,12 @@ enum class ProviderType(
     val defaultBaseUrl: String?,
     val recommendedModels: List<String> = emptyList()
 ) {
+    AUTO_DETECT(
+        displayName = "Auto-detect (any API key)",
+        defaultModel = "",
+        defaultBaseUrl = null,
+        recommendedModels = emptyList()
+    ),
     GEMINI(
         displayName = "Google Gemini",
         defaultModel = "gemini-2.5-flash",

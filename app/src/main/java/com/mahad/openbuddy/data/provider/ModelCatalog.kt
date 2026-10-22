@@ -29,9 +29,11 @@ object ModelCatalog {
         ProviderType.KIMI -> listOf(
             "kimi-k2", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k", "moonshot"
         )
-        ProviderType.CUSTOM_OPENAI -> listOf(
-            "gpt-4o", "gpt-4.1", "gpt-5", "deepseek-chat", "deepseek-reasoner",
-            "qwen-plus", "qwen", "llama", "mistral", "gemini"
+        ProviderType.CUSTOM_OPENAI, ProviderType.AUTO_DETECT -> listOf(
+            "gpt-4o", "claude-sonnet", "gemini-2.5-flash", "deepseek-chat",
+            "mistral-large", "mistral-medium", "llama-3.3-70b", "grok-4", "grok-3",
+            "gpt-4.1", "gpt-5", "deepseek-reasoner", "codestral",
+            "qwen-plus", "mistral", "llama", "qwen", "grok", "gemini"
         )
     }
 
@@ -41,6 +43,7 @@ object ModelCatalog {
         apiKey: String
     ): Result<List<String>> {
         return when (type) {
+            ProviderType.AUTO_DETECT -> ProviderDetector.detect(apiKey).map { it.models }
             ProviderType.GEMINI -> GeminiProvider.fetchAvailableModels(apiKey)
             ProviderType.CLAUDE -> ClaudeProvider.fetchAvailableModels(apiKey)
             ProviderType.KIMI -> OpenAiCompatibleProvider.fetchAvailableModels(
