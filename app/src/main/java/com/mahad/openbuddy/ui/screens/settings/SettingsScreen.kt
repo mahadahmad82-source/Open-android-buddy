@@ -193,6 +193,8 @@ fun SettingsScreen(
     onInspectBackup: ((envelopeJson: String, passphrase: String) -> Result<RestorePreviewSummary>)? = null,
     onExecuteRestore: (suspend (summary: RestorePreviewSummary, mode: RestoreMode) -> Result<Unit>)? = null,
     onFetchGeminiModels: (suspend (apiKey: String) -> Result<List<String>>)? = null,
+    appVersion: String = "",
+    onCheckForUpdates: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -277,6 +279,24 @@ fun SettingsScreen(
                         isSelected = selectedTabIndex == index,
                         onClick = { selectedTabIndex = index }
                     )
+                }
+            }
+
+            // App version + manual update check (updates also check on launch)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Open Buddy v$appVersion",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onCheckForUpdates) {
+                    Text("Check for updates", fontSize = 12.sp)
                 }
             }
 

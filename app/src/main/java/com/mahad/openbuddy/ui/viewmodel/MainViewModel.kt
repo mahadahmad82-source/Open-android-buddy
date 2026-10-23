@@ -505,6 +505,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _pendingAttachment.value = null
     }
 
+    // ------------------------------------------------------------------
+    // Self-update: check GitHub releases, download in-app, hand to the
+    // system installer (see data/update/AppUpdateManager).
+    // ------------------------------------------------------------------
+
+    private val _updateState = MutableStateFlow<com.mahad.openbuddy.data.update.UpdateUiState>(
+        com.mahad.openbuddy.data.update.UpdateUiState.Idle
+    )
+    val updateState: StateFlow<com.mahad.openbuddy.data.update.UpdateUiState> = _updateState.asStateFlow()
+    private var updateCheckedThisSession = false
+
+    fun installedVersionName(): String {
+        return try {
+            val app = getApplication<Application>()
+            @Suppress("DEPRECATION")
+            app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "0.0.0"
+        } catch (e: Exception) {
+            "0.0.0"
+        }
+    }
+
+    fun checkForUpdates(manual: Boolean = false) {
+        if (!manual && updateCheckedThisSession) return
+        updateCheckedThisSession = true
+        if (_updateState.value is com.mahad.openbuddy.data.update.UpdateUiState.Downloading) return
+        viewModelScope.launch {
+            _updateState.value = com.mahad.openbuddy.data.update.UpdateUiState.Checking
+            val result = com.mahad.openbuddy.data.update.AppUpdateManager.fetchLatestUpdate(installedVersionName())
+            result.fold(
+                onSuccess = { info ->
+                    _updateState.value = when {
+                        info != null -> com.mahad.openbuddy.data.update.UpdateUiState.Available(info)
+                        manual -> com.mahad.openbuddy.data.update.UpdateUiState.UpToDate
+                        else -> com.mahad.openbuddy.data.update.UpdateUiState.Idle
+                    }
+                },
+                onFailure = { error ->
+                    _updateState.value = if (manual) {
+                        com.mahad.openbuddy.data.update.UpdateUiState.Failed(error.message ?: "Update check failed.")
+                    } else {
+                        com.mahad.openbuddy.data.update.UpdateUiState.Idle
+                    }
+                }
+            )
+        }
+    }
+
+    fun downloadUpdate() {
+        val current = _updateState.value
+        val info = (current as? com.mahad.openbuddy.data.update.UpdateUiState.Available)?.info ?: return
+        viewModelScope.launch {
+            _updateState.value = com.mahad.openbuddy.data.update.UpdateUiState.Downloading(info, 0)
+            val result = com.mahad.openbuddy.data.update.AppUpdateManager.downloadApk(
+                getApplication(),
+                info
+            ) { percent ->
+                _updateState.value = com.mahad.openbuddy.data.update.UpdateUiState.Downloading(info, percent)
+            }
+            _updateState.value = result.fold(
+                onSuccess = { file -> com.mahad.openbuddy.data.update.UpdateUiState.ReadyToInstall(info, file) },
+                onFailure = { error ->
+                    com.mahad.openbuddy.data.update.UpdateUiState.Failed(error.message ?: "Download failed.")
+                }
+            )
+        }
+    }
+
+    fun dismissUpdate() {
+        _updateState.value = com.mahad.openbuddy.data.update.UpdateUiState.Idle
+    }
+
     fun sendMessage(text: String) {
         val convId = activeConversationId.value ?: return
         val attachment = _pendingAttachment.value

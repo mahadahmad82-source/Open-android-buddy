@@ -158,6 +158,91 @@ fun MainScreen(
         )
     }
 
+    // Self-update: check GitHub releases once per launch; the dialog below
+    // handles download + hand-off to the system installer.
+    val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+    val uiContext = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        viewModel.checkForUpdates()
+    }
+    when (val state = updateState) {
+        is com.mahad.openbuddy.data.update.UpdateUiState.Available -> {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.dismissUpdate() },
+                title = { Text("Update available") },
+                text = {
+                    Column {
+                        Text(
+                            text = "Open Buddy v${state.info.versionName} is ready (you have v${viewModel.installedVersionName()}).",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        if (state.info.notes.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = state.info.notes,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.downloadUpdate() }) { Text("Download & install") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissUpdate() }) { Text("Later") }
+                }
+            )
+        }
+        is com.mahad.openbuddy.data.update.UpdateUiState.Downloading -> {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { /* download continues; cannot dismiss mid-download */ },
+                title = { Text("Downloading update") },
+                text = {
+                    Column {
+                        Text(
+                            text = "Open Buddy v${state.info.versionName} — ${state.percent}%",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        androidx.compose.material3.LinearProgressIndicator(
+                            progress = { state.percent / 100f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {}
+            )
+        }
+        is com.mahad.openbuddy.data.update.UpdateUiState.ReadyToInstall -> {
+            androidx.compose.runtime.LaunchedEffect(state.file) {
+                launchUpdateInstall(uiContext, state.file)
+                viewModel.dismissUpdate()
+            }
+        }
+        is com.mahad.openbuddy.data.update.UpdateUiState.UpToDate -> {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.dismissUpdate() },
+                title = { Text("You're up to date") },
+                text = { Text("Open Buddy v${viewModel.installedVersionName()} is the latest version.") },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.dismissUpdate() }) { Text("OK") }
+                }
+            )
+        }
+        is com.mahad.openbuddy.data.update.UpdateUiState.Failed -> {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.dismissUpdate() },
+                title = { Text("Update failed") },
+                text = { Text(state.message) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.dismissUpdate() }) { Text("OK") }
+                }
+            )
+        }
+        else -> Unit
+    }
+
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val activeConversationId by viewModel.activeConversationId.collectAsStateWithLifecycle()
     val messages by viewModel.activeMessages.collectAsStateWithLifecycle()
@@ -414,6 +499,8 @@ fun MainScreen(
                         }
                         ScreenTab.SETTINGS -> {
                             SettingsScreen(
+                                appVersion = viewModel.installedVersionName(),
+                                onCheckForUpdates = { viewModel.checkForUpdates(manual = true) },
                                 providers = providers,
                                 currentSystemPrompt = systemPrompt,
                                 codeDrafts = codeDrafts,
@@ -577,5 +664,42 @@ fun FloatingGlassBottomBar(
                 }
             }
         }
+    }
+}
+
+/**
+ * Hands a downloaded update APK to the system installer. Android requires
+ * the "install unknown apps" grant for sideloaded self-updates: when it is
+ * missing, the user is sent to the exact settings page to allow it, and the
+ * next update check/download cycle (or the dialog's retry) can proceed.
+ */
+private fun launchUpdateInstall(context: android.content.Context, file: java.io.File) {
+    try {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            val settingsIntent = android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                android.net.Uri.parse("package:${context.packageName}")
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(settingsIntent)
+            return
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file
+        )
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            )
+        }
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        // If the installer cannot be opened, the downloaded APK stays in the
+        // cache and the next launch's update check will offer it again.
     }
 }

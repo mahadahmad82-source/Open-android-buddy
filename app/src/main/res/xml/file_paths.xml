@@ -2,4 +2,6 @@
 <paths>
     <!-- Agent-generated media (images/videos) shared with viewer apps -->
     <files-path name="generated_media" path="generated/" />
+    <!-- Self-update APK downloaded by the in-app updater -->
+    <cache-path name="updates" path="updates/" />
 </paths>
