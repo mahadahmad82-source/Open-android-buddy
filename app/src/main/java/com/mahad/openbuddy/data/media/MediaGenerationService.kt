@@ -180,6 +180,8 @@ class MediaGenerationService(private val context: Context) {
         prompt: String,
         modelOverride: String?
     ): Result<File> {
+        val base = config.baseUrl?.trimEnd('/')?.takeIf { it.isNotBlank() }
+            ?: return Result.failure(Exception("${config.name} has no base URL configured."))
         val configured = config.modelName.trim()
         val model = modelOverride?.takeIf { it.isNotBlank() }
             ?: configured.takeIf {
@@ -196,11 +198,11 @@ class MediaGenerationService(private val context: Context) {
             .readTimeout(12, TimeUnit.MINUTES)
             .build()
         val request = Request.Builder()
-            .url(config.baseUrl.trimEnd('/') + "/videos/generations")
+            .url("$base/videos/generations")
             .addHeader("Authorization", "Bearer $apiKey")
             .post(payload.toString().toRequestBody(jsonMediaType))
             .build()
-        gatewayClient.newCall(request).execute().use { response ->
+        val videoUrl = gatewayClient.newCall(request).execute().use { response ->
             val bodyText = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 val message = runCatching {
@@ -213,13 +215,27 @@ class MediaGenerationService(private val context: Context) {
             val json = JSONObject(bodyText)
             val data = json.optJSONArray("data")
             val first = if (data != null && data.length() > 0) data.optJSONObject(0) else null
-            val url = first?.optString("url")?.takeIf { it.isNotBlank() }
+            first?.optString("url")?.takeIf { it.isNotBlank() }
                 ?: first?.optString("video_url")?.takeIf { it.isNotBlank() }
                 ?: json.optString("url").takeIf { it.isNotBlank() }
                 ?: return Result.failure(
                     Exception("Video gateway (${config.name}) response had no video URL: ${bodyText.take(300)}")
                 )
-            return storage.downloadToFile(url, "video", "mp4")
+        }
+        // Download the finished video. Gateway-hosted URLs (same origin as
+        // the gateway itself) can be auth-gated, so send the key for those.
+        val downloadBuilder = Request.Builder().url(videoUrl).get()
+        if (videoUrl.startsWith(base)) {
+            downloadBuilder.header("Authorization", "Bearer $apiKey")
+        }
+        return client.newCall(downloadBuilder.build()).execute().use { dl ->
+            if (!dl.isSuccessful) {
+                Result.failure(Exception("Video gateway (${config.name}) video download failed: HTTP ${dl.code}"))
+            } else {
+                val bytes = dl.body?.bytes()
+                if (bytes == null) Result.failure(Exception("Could not download the generated video."))
+                else Result.success(saveBytes(bytes, "mp4", "video"))
+            }
         }
     }
 
