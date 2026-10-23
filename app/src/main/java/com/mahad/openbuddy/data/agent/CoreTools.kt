@@ -274,7 +274,7 @@ class CoreTools(
 
         object : AgentTool {
             override val name = "generate_video"
-            override val description = "Generate a short vertical (9:16) video and show it in the chat. Several backends are available — Google Veo (Gemini key), fal.ai (Kling, Luma, MiniMax) and Replicate (Veo, Kling, Seedance) — and the app tries them in order until one succeeds, using the user's saved keys automatically even if a different provider is active for chat. Optional argument \"backend\": \"veo\", \"fal\" or \"replicate\" to force one. Takes 1-6 minutes. Arguments: {\"prompt\": \"...\"}. Asks the user to approve first because it is slow and uses paid quota."
+            override val description = "Generate a short vertical (9:16) video and show it in the chat. Several backends are available — Google Veo (Gemini key), fal.ai (Kling, Luma, MiniMax), Replicate (Veo, Kling, Seedance) and OpenAI-style video gateways such as the user's OmniRoute (which can serve Veo through its Google Flow/Antigravity connection, Runway and more via /videos/generations) — and the app tries them in order until one succeeds, using the user's saved providers automatically even if a different provider is active for chat. Optional argument \"backend\": \"veo\", \"fal\", \"replicate\" or \"omniroute\" to force one. Optional argument \"model\": a specific video model id for the chosen backend (for OmniRoute e.g. \"googleflow/veo-3.1-fast-generate\"). Takes 1-6 minutes. Arguments: {\"prompt\": \"...\"}. Asks the user to approve first because it is slow and uses paid quota."
             override val requiresApproval = true
             override fun approvalSummary(args: JSONObject) = "Generate video: \"${args.optString("prompt").take(80)}\""
             override suspend fun execute(args: JSONObject): ToolOutcome {
@@ -282,9 +282,9 @@ class CoreTools(
                 if (prompt.isBlank()) return ToolOutcome("A video prompt is required.")
                 var providers = mediaProviders(true)
                 if (providers.isEmpty()) {
-                    return ToolOutcome("No video provider with an API key was found. Tell the user: add a Gemini key (Veo), a fal.ai key, or a Replicate token in Settings → AI Providers.")
+                    return ToolOutcome("No video provider with an API key was found. Tell the user: add a Gemini key (Veo), a fal.ai key, a Replicate token, or an OmniRoute/Custom gateway provider in Settings → AI Providers.")
                 }
-                // Optional backend forcing: "veo" / "fal" / "replicate".
+                // Optional backend forcing: "veo" / "fal" / "replicate" / "omniroute".
                 val wanted = args.optString("backend").trim().lowercase()
                 if (wanted.isNotBlank()) {
                     val filtered = providers.filter { (config, _) ->
@@ -292,14 +292,18 @@ class CoreTools(
                             "veo", "gemini", "google" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI
                             "fal", "fal.ai", "kling", "luma" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.FAL
                             "replicate" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.REPLICATE
+                            "omniroute", "gateway", "flow", "googleflow" ->
+                                config.type == com.mahad.openbuddy.domain.model.ProviderType.CUSTOM_OPENAI ||
+                                    config.type == com.mahad.openbuddy.domain.model.ProviderType.KIMI
                             else -> true
                         }
                     }
                     if (filtered.isNotEmpty()) providers = filtered
                 }
+                val modelOverride = args.optString("model").trim().takeIf { it.isNotBlank() }
                 val failures = mutableListOf<String>()
                 for ((config, key) in providers) {
-                    val result = mediaService.generateVideo(config, key, prompt)
+                    val result = mediaService.generateVideo(config, key, prompt, modelOverride)
                     val file = result.getOrNull()
                     if (file != null) {
                         return ToolOutcome(

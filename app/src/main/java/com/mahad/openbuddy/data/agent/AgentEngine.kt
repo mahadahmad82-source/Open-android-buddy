@@ -322,8 +322,10 @@ class AgentEngine(
                 // Resolve generation-capable providers across ALL saved
                 // providers, not just the active chat provider, in preference
                 // order (active first). Video backends: Gemini (Veo direct),
-                // fal.ai (Kling/Luma/MiniMax) and Replicate (Veo/Kling/
-                // Seedance) — the tool fails over from one to the next.
+                // fal.ai (Kling/Luma/MiniMax), Replicate (Veo/Kling/
+                // Seedance) and OpenAI-style gateways (a Custom/Kimi provider
+                // such as OmniRoute serves /videos/generations — Veo via
+                // Google Flow, Runway, …) — the tool fails over in order.
                 // Images: Gemini-preferred, media-only types excluded.
                 val all = openBuddyRepository.getAllProviderConfigs()
                 val active = openBuddyRepository.getActiveProvider()
@@ -335,7 +337,9 @@ class AgentEngine(
                     ordered.filter {
                         it.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI ||
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.FAL ||
-                            it.type == com.mahad.openbuddy.domain.model.ProviderType.REPLICATE
+                            it.type == com.mahad.openbuddy.domain.model.ProviderType.REPLICATE ||
+                            it.type == com.mahad.openbuddy.domain.model.ProviderType.CUSTOM_OPENAI ||
+                            it.type == com.mahad.openbuddy.domain.model.ProviderType.KIMI
                     }
                 } else {
                     ordered
@@ -429,6 +433,7 @@ class AgentEngine(
             |RULES:
             |- Only call tools that are listed below. Never invent tool names or arguments.
             |- You CAN create media: when the user asks for an image or a video, call generate_image / generate_video. Never claim you have no image or video tool, and never send the user to external websites for generation.
+            |- generate_video tries every saved video backend in order (Gemini Veo, the user's OmniRoute gateway — Veo via Google Flow, fal.ai, Replicate). If it fails, report the tool's actual error text; never invent excuses like "a technical update is in progress".
             |- When the task is done, reply with a normal final answer and NO tool blocks.
             |- Keep final answers concise and in the user's language style.
             |- Tools marked as approval-gated will be shown to the user first; if a result says the user rejected an action, do not retry it.

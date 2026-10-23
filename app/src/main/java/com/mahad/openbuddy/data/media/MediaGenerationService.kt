@@ -142,13 +142,20 @@ class MediaGenerationService(private val context: Context) {
         }
     }
 
-    suspend fun generateVideo(config: AiProviderConfig, apiKey: String, prompt: String): Result<File> =
+    suspend fun generateVideo(
+        config: AiProviderConfig,
+        apiKey: String,
+        prompt: String,
+        modelOverride: String? = null
+    ): Result<File> =
         withContext(Dispatchers.IO) {
             try {
                 when (config.type) {
                     ProviderType.GEMINI -> generateVideoVeo(apiKey, prompt)
-                    ProviderType.FAL -> generateVideoFal(apiKey, config.modelName, prompt)
-                    ProviderType.REPLICATE -> generateVideoReplicate(apiKey, config.modelName, prompt)
+                    ProviderType.FAL -> generateVideoFal(apiKey, modelOverride ?: config.modelName, prompt)
+                    ProviderType.REPLICATE -> generateVideoReplicate(apiKey, modelOverride ?: config.modelName, prompt)
+                    ProviderType.CUSTOM_OPENAI, ProviderType.KIMI ->
+                        generateVideoOpenAiGateway(config, apiKey, prompt, modelOverride)
                     else -> Result.failure(
                         Exception("${config.name} cannot generate videos. Add a Gemini, fal.ai or Replicate provider for video generation.")
                     )
@@ -157,6 +164,64 @@ class MediaGenerationService(private val context: Context) {
                 Result.failure(e)
             }
         }
+
+    /**
+     * OpenAI-style video gateways (e.g. OmniRoute): POST {baseUrl}/videos/generations
+     * with {model, prompt}. The gateway runs the job internally (Veo via
+     * Google Flow/Vertex, Runway, fal, …) and answers OpenAI-like:
+     * {"data": [{"url": "https://…", "format": "mp4"}]} — one blocking call.
+     * A gateway's chat model ("auto") is NOT a video model, so when no
+     * explicit video model is configured, the Google Flow Veo Fast model is
+     * used — the route an Antigravity connection inside OmniRoute unlocks.
+     */
+    private fun generateVideoOpenAiGateway(
+        config: AiProviderConfig,
+        apiKey: String,
+        prompt: String,
+        modelOverride: String?
+    ): Result<File> {
+        val configured = config.modelName.trim()
+        val model = modelOverride?.takeIf { it.isNotBlank() }
+            ?: configured.takeIf {
+                it.isNotBlank() && it != "auto" &&
+                    (it.contains("/") || it.contains("veo", true) || it.contains("video", true))
+            }
+            ?: "googleflow/veo-3.1-fast-generate"
+        val payload = JSONObject().apply {
+            put("model", model)
+            put("prompt", prompt)
+        }
+        val gatewayClient = client.newBuilder()
+            .callTimeout(12, TimeUnit.MINUTES)
+            .readTimeout(12, TimeUnit.MINUTES)
+            .build()
+        val request = Request.Builder()
+            .url(config.baseUrl.trimEnd('/') + "/videos/generations")
+            .addHeader("Authorization", "Bearer $apiKey")
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+        gatewayClient.newCall(request).execute().use { response ->
+            val bodyText = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val message = runCatching {
+                    JSONObject(bodyText).optJSONObject("error")?.optString("message")
+                }.getOrNull()?.takeIf { it.isNotBlank() } ?: bodyText.take(300)
+                return Result.failure(
+                    Exception("Video gateway (${config.name}, model $model) HTTP ${response.code}: $message")
+                )
+            }
+            val json = JSONObject(bodyText)
+            val data = json.optJSONArray("data")
+            val first = if (data != null && data.length() > 0) data.optJSONObject(0) else null
+            val url = first?.optString("url")?.takeIf { it.isNotBlank() }
+                ?: first?.optString("video_url")?.takeIf { it.isNotBlank() }
+                ?: json.optString("url").takeIf { it.isNotBlank() }
+                ?: return Result.failure(
+                    Exception("Video gateway (${config.name}) response had no video URL: ${bodyText.take(300)}")
+                )
+            return storage.downloadToFile(url, "video", "mp4")
+        }
+    }
 
     /**
      * fal.ai queue API: submit → poll status_url → fetch response_url.
