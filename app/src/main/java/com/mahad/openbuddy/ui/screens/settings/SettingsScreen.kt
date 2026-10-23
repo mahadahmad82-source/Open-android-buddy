@@ -2893,6 +2893,8 @@ private fun ProviderEditorDialog(
                     ProviderType.KIMI -> listOf("moonshot-v1-8k", "moonshot-v1-32k")
                     ProviderType.CUSTOM_OPENAI -> listOf("gpt-4o", "deepseek-chat")
                     ProviderType.AUTO_DETECT -> emptyList()
+                    ProviderType.FAL -> ProviderType.FAL.recommendedModels
+                    ProviderType.REPLICATE -> ProviderType.REPLICATE.recommendedModels
                 }
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
