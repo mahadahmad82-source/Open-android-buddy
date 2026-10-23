@@ -30,12 +30,12 @@ class CoreTools(
     private val memoryDao: MemoryDao,
     private val mediaService: MediaGenerationService,
     /**
-     * Supplies (provider config, api key) for media tools, resolved across ALL
-     * saved providers: video always resolves to a Gemini provider (Veo), image
-     * prefers Gemini and falls back to other image-capable providers — so media
-     * generation works even when a different provider is active for chat.
+     * Supplies (provider config, api key) pairs for media tools, resolved
+     * across ALL saved providers in preference order — so media generation
+     * works even when a different provider is active for chat, and video
+     * generation can fail over from one backend to the next.
      */
-    private val mediaProvider: suspend (forVideo: Boolean) -> Pair<AiProviderConfig, String>?
+    private val mediaProviders: suspend (forVideo: Boolean) -> List<Pair<AiProviderConfig, String>>
 ) {
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -262,7 +262,7 @@ class CoreTools(
             override suspend fun execute(args: JSONObject): ToolOutcome {
                 val prompt = args.optString("prompt").trim()
                 if (prompt.isBlank()) return ToolOutcome("An image prompt is required.")
-                val provider = mediaProvider(false)
+                val provider = mediaProviders(false).firstOrNull()
                     ?: return ToolOutcome("No image-capable provider with an API key was found. Tell the user to add a Gemini provider in Settings → AI Providers.")
                 val result = mediaService.generateImage(provider.first, provider.second, prompt)
                 return result.fold(
@@ -274,19 +274,43 @@ class CoreTools(
 
         object : AgentTool {
             override val name = "generate_video"
-            override val description = "Generate a short vertical (9:16) video with Google Veo and show it in the chat. The app automatically uses the user's saved Gemini key for this, even if a different provider is active for chat — you do NOT need the user to switch providers. Takes 1-5 minutes. Arguments: {\"prompt\": \"...\"}. Asks the user to approve first because it is slow and uses paid quota."
+            override val description = "Generate a short vertical (9:16) video and show it in the chat. Several backends are available — Google Veo (Gemini key), fal.ai (Kling, Luma, MiniMax) and Replicate (Veo, Kling, Seedance) — and the app tries them in order until one succeeds, using the user's saved keys automatically even if a different provider is active for chat. Optional argument \"backend\": \"veo\", \"fal\" or \"replicate\" to force one. Takes 1-6 minutes. Arguments: {\"prompt\": \"...\"}. Asks the user to approve first because it is slow and uses paid quota."
             override val requiresApproval = true
             override fun approvalSummary(args: JSONObject) = "Generate video: \"${args.optString("prompt").take(80)}\""
             override suspend fun execute(args: JSONObject): ToolOutcome {
                 val prompt = args.optString("prompt").trim()
                 if (prompt.isBlank()) return ToolOutcome("A video prompt is required.")
-                val provider = mediaProvider(true)
-                    ?: return ToolOutcome("No Gemini provider with an API key was found. Tell the user: video generation needs a Gemini key with Veo access — add a Gemini provider in Settings → AI Providers.")
-                val result = mediaService.generateVideo(provider.first, provider.second, prompt)
-                return result.fold(
-                    onSuccess = { ToolOutcome("Video generated and shown to the user in the chat.", mediaPath = it.absolutePath, mediaKind = "video") },
-                    onFailure = { ToolOutcome("Video generation failed: ${it.message}") }
-                )
+                var providers = mediaProviders(true)
+                if (providers.isEmpty()) {
+                    return ToolOutcome("No video provider with an API key was found. Tell the user: add a Gemini key (Veo), a fal.ai key, or a Replicate token in Settings → AI Providers.")
+                }
+                // Optional backend forcing: "veo" / "fal" / "replicate".
+                val wanted = args.optString("backend").trim().lowercase()
+                if (wanted.isNotBlank()) {
+                    val filtered = providers.filter { (config, _) ->
+                        when (wanted) {
+                            "veo", "gemini", "google" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI
+                            "fal", "fal.ai", "kling", "luma" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.FAL
+                            "replicate" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.REPLICATE
+                            else -> true
+                        }
+                    }
+                    if (filtered.isNotEmpty()) providers = filtered
+                }
+                val failures = mutableListOf<String>()
+                for ((config, key) in providers) {
+                    val result = mediaService.generateVideo(config, key, prompt)
+                    val file = result.getOrNull()
+                    if (file != null) {
+                        return ToolOutcome(
+                            "Video generated with ${config.name} and shown to the user in the chat.",
+                            mediaPath = file.absolutePath,
+                            mediaKind = "video"
+                        )
+                    }
+                    failures += "${config.name}: ${result.exceptionOrNull()?.message ?: "unknown error"}"
+                }
+                return ToolOutcome("Video generation failed on every available backend. " + failures.joinToString(" | "))
             }
         }
     )

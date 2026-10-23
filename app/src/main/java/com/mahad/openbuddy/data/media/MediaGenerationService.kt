@@ -145,16 +145,181 @@ class MediaGenerationService(private val context: Context) {
     suspend fun generateVideo(config: AiProviderConfig, apiKey: String, prompt: String): Result<File> =
         withContext(Dispatchers.IO) {
             try {
-                if (config.type != ProviderType.GEMINI) {
-                    return@withContext Result.failure(
-                        Exception("Video generation is currently supported only with a Gemini provider (Veo). Switch the active provider to Gemini to generate videos.")
+                when (config.type) {
+                    ProviderType.GEMINI -> generateVideoVeo(apiKey, prompt)
+                    ProviderType.FAL -> generateVideoFal(apiKey, config.modelName, prompt)
+                    ProviderType.REPLICATE -> generateVideoReplicate(apiKey, config.modelName, prompt)
+                    else -> Result.failure(
+                        Exception("${config.name} cannot generate videos. Add a Gemini, fal.ai or Replicate provider for video generation.")
                     )
                 }
-                generateVideoVeo(apiKey, prompt)
             } catch (e: Exception) {
                 Result.failure(e)
             }
         }
+
+    /**
+     * fal.ai queue API: submit → poll status_url → fetch response_url.
+     * The user's provider model field picks the fal model (Kling by default;
+     * Luma, MiniMax and Veo models also work — aspect_ratio is only sent to
+     * models known to accept it).
+     */
+    private suspend fun generateVideoFal(apiKey: String, modelName: String, prompt: String): Result<File> {
+        val model = modelName.takeIf { it.startsWith("fal-ai/") }
+            ?: ProviderType.FAL.defaultModel
+        val payload = JSONObject().apply {
+            put("prompt", prompt)
+            if (model.contains("kling") || model.contains("luma") || model.contains("veo")) {
+                put("aspect_ratio", "9:16")
+            }
+            if (model.contains("kling")) {
+                put("duration", "5")
+            }
+        }
+        val submitRequest = Request.Builder()
+            .url("https://queue.fal.run/$model")
+            .header("Authorization", "Key $apiKey")
+            .header("Content-Type", "application/json")
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+        val (statusUrl, responseUrl) = client.newCall(submitRequest).execute().use { response ->
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return Result.failure(Exception("fal.ai submit error (${response.code}): ${errorMessage(body)}"))
+            }
+            val json = JSONObject(body)
+            val s = json.optString("status_url", "")
+            val r = json.optString("response_url", "")
+            if (s.isBlank() || r.isBlank()) {
+                return Result.failure(Exception("fal.ai did not return queue URLs."))
+            }
+            s to r
+        }
+
+        // Poll until COMPLETED (most clips finish within 1-5 minutes).
+        var done = false
+        var polls = 0
+        while (polls < 72 && !done) {
+            polls++
+            delay(5_000)
+            val statusRequest = Request.Builder()
+                .url(statusUrl)
+                .header("Authorization", "Key $apiKey")
+                .get()
+                .build()
+            client.newCall(statusRequest).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    when (JSONObject(body).optString("status", "")) {
+                        "COMPLETED" -> done = true
+                        "FAILED" -> return Result.failure(Exception("fal.ai reported the generation as FAILED."))
+                    }
+                }
+            }
+        }
+        if (!done) return Result.failure(Exception("fal.ai did not finish the video in time."))
+
+        val resultRequest = Request.Builder()
+            .url(responseUrl)
+            .header("Authorization", "Key $apiKey")
+            .get()
+            .build()
+        val videoUrl = client.newCall(resultRequest).execute().use { response ->
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return Result.failure(Exception("fal.ai result error (${response.code}): ${errorMessage(body)}"))
+            }
+            JSONObject(body).optJSONObject("video")?.optString("url", "")?.takeIf { it.isNotBlank() }
+        } ?: return Result.failure(Exception("fal.ai result contained no video URL."))
+        return downloadVideo(videoUrl, null)
+    }
+
+    /**
+     * Replicate predictions API: create → poll → download output.
+     * The user's provider model field picks the model (Veo 3 by default;
+     * Kling, MiniMax and Seedance also work).
+     */
+    private suspend fun generateVideoReplicate(apiKey: String, modelName: String, prompt: String): Result<File> {
+        val model = modelName.takeIf { it.contains("/") } ?: ProviderType.REPLICATE.defaultModel
+        val input = JSONObject().apply {
+            put("prompt", prompt)
+            if (model.startsWith("google/veo")) {
+                put("aspect_ratio", "9:16")
+            }
+        }
+        val payload = JSONObject().apply { put("input", input) }
+        val createRequest = Request.Builder()
+            .url("https://api.replicate.com/v1/models/$model/predictions")
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", "application/json")
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+        val predictionId = client.newCall(createRequest).execute().use { response ->
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return Result.failure(Exception("Replicate create error (${response.code}): ${errorMessage(body)}"))
+            }
+            JSONObject(body).optString("id", "")
+        }
+        if (predictionId.isBlank()) {
+            return Result.failure(Exception("Replicate did not return a prediction id."))
+        }
+
+        var outputUrl: String? = null
+        var polls = 0
+        while (polls < 72 && outputUrl == null) {
+            polls++
+            delay(5_000)
+            val pollRequest = Request.Builder()
+                .url("https://api.replicate.com/v1/predictions/$predictionId")
+                .header("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+            client.newCall(pollRequest).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val json = JSONObject(body)
+                    when (json.optString("status", "")) {
+                        "succeeded" -> outputUrl = extractOutputUrl(json.opt("output"))
+                        "failed", "canceled" -> return Result.failure(
+                            Exception("Replicate generation ${json.optString("status")}: ${json.optString("error", "unknown error")}")
+                        )
+                    }
+                }
+            }
+        }
+        val url = outputUrl ?: return Result.failure(Exception("Replicate did not finish the video in time."))
+        return downloadVideo(url, null)
+    }
+
+    /** Replicate outputs can be a URL string or an array of URLs. */
+    private fun extractOutputUrl(output: Any?): String? {
+        return when (output) {
+            is String -> output.takeIf { it.startsWith("http") }
+            is org.json.JSONArray -> {
+                var found: String? = null
+                for (i in 0 until output.length()) {
+                    val item = output.optString(i, "")
+                    if (item.startsWith("http")) {
+                        found = item
+                        break
+                    }
+                }
+                found
+            }
+            else -> null
+        }
+    }
+
+    private fun downloadVideo(url: String, apiKeyHeader: String?): Result<File> {
+        val builder = Request.Builder().url(url).get()
+        if (apiKeyHeader != null) builder.header("x-goog-api-key", apiKeyHeader)
+        return client.newCall(builder.build()).execute().use { response ->
+            val bytes = response.body?.bytes()
+                ?: return Result.failure(Exception("Could not download the generated video."))
+            Result.success(saveBytes(bytes, "mp4", "video"))
+        }
+    }
 
     private suspend fun generateVideoVeo(apiKey: String, prompt: String): Result<File> {
         val model = "veo-3.1-fast-generate-preview"

@@ -54,6 +54,32 @@ enum class ProviderType(
             "deepseek-reasoner",
             "qwen-plus"
         )
+    ),
+    // Media-only providers: not chat APIs — they exist so the agent's
+    // generate_video tool has several independent backends (failover when
+    // one platform is down, out of quota, or rejects a prompt).
+    FAL(
+        displayName = "fal.ai — Video Generation (Kling, Luma, MiniMax, Veo)",
+        defaultModel = "fal-ai/kling-video/v2.1/standard/text-to-video",
+        defaultBaseUrl = "https://queue.fal.run",
+        recommendedModels = listOf(
+            "fal-ai/kling-video/v2.1/standard/text-to-video",
+            "fal-ai/kling-video/v2.1/master/text-to-video",
+            "fal-ai/luma-dream-machine",
+            "fal-ai/minimax/video-01-live/text-to-video",
+            "fal-ai/veo3/fast"
+        )
+    ),
+    REPLICATE(
+        displayName = "Replicate — Video Generation (Veo, Kling, Seedance)",
+        defaultModel = "google/veo-3",
+        defaultBaseUrl = "https://api.replicate.com/v1",
+        recommendedModels = listOf(
+            "google/veo-3",
+            "kwaivgi/kling-v2.1",
+            "minimax/video-01",
+            "bytedance/seedance-1-lite"
+        )
     );
 
     companion object {

@@ -318,33 +318,40 @@ class AgentEngine(
             supabaseRepository = supabaseRepository,
             memoryDao = memoryDao,
             mediaService = mediaService,
-            mediaProvider = { forVideo ->
-                // Resolve a generation-capable provider across ALL saved
-                // providers, not just the active chat provider: video needs
-                // Gemini (Veo); images prefer Gemini, then any non-Claude
-                // provider with a key.
+            mediaProviders = { forVideo ->
+                // Resolve generation-capable providers across ALL saved
+                // providers, not just the active chat provider, in preference
+                // order (active first). Video backends: Gemini (Veo direct),
+                // fal.ai (Kling/Luma/MiniMax) and Replicate (Veo/Kling/
+                // Seedance) — the tool fails over from one to the next.
+                // Images: Gemini-preferred, media-only types excluded.
                 val all = openBuddyRepository.getAllProviderConfigs()
                 val active = openBuddyRepository.getActiveProvider()
                 val ordered = buildList {
                     if (active != null) add(active)
                     addAll(all.filter { it.id != active?.id })
                 }
-                val candidates = if (forVideo) {
-                    ordered.filter { it.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI }
+                val filtered = if (forVideo) {
+                    ordered.filter {
+                        it.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI ||
+                            it.type == com.mahad.openbuddy.domain.model.ProviderType.FAL ||
+                            it.type == com.mahad.openbuddy.domain.model.ProviderType.REPLICATE
+                    }
                 } else {
                     ordered
-                        .filter { it.type != com.mahad.openbuddy.domain.model.ProviderType.CLAUDE }
+                        .filter {
+                            it.type != com.mahad.openbuddy.domain.model.ProviderType.CLAUDE &&
+                                it.type != com.mahad.openbuddy.domain.model.ProviderType.FAL &&
+                                it.type != com.mahad.openbuddy.domain.model.ProviderType.REPLICATE
+                        }
                         .sortedByDescending { it.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI }
                 }
-                var found: Pair<com.mahad.openbuddy.domain.model.AiProviderConfig, String>? = null
-                for (config in candidates) {
+                val pairs = mutableListOf<Pair<com.mahad.openbuddy.domain.model.AiProviderConfig, String>>()
+                for (config in filtered) {
                     val key = secretStore.getApiKey(config.id)
-                    if (!key.isNullOrBlank()) {
-                        found = config to key
-                        break
-                    }
+                    if (!key.isNullOrBlank()) pairs += config to key
                 }
-                found
+                pairs
             }
         )
         val tools = mutableListOf<AgentTool>()

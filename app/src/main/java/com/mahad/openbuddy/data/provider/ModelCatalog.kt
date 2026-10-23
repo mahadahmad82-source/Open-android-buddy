@@ -35,6 +35,8 @@ object ModelCatalog {
             "gpt-4.1", "gpt-5", "deepseek-reasoner", "codestral",
             "qwen-plus", "mistral", "llama", "qwen", "grok", "gemini"
         )
+        ProviderType.FAL -> ProviderType.FAL.recommendedModels
+        ProviderType.REPLICATE -> ProviderType.REPLICATE.recommendedModels
     }
 
     suspend fun fetchModels(
@@ -54,6 +56,8 @@ object ModelCatalog {
                 baseUrl = baseUrl ?: ProviderType.CUSTOM_OPENAI.defaultBaseUrl ?: "https://api.openai.com/v1",
                 apiKey = apiKey
             )
+            ProviderType.FAL -> MediaProviderProbe.falModels(apiKey)
+            ProviderType.REPLICATE -> MediaProviderProbe.replicateModels(apiKey)
         }
     }
 

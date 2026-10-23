@@ -54,13 +54,31 @@ object ProviderDetector {
         Candidate("Fireworks AI", ProviderType.CUSTOM_OPENAI, "https://api.fireworks.ai/inference/v1"),
         Candidate("Cerebras", ProviderType.CUSTOM_OPENAI, "https://api.cerebras.ai/v1"),
         Candidate("SiliconFlow", ProviderType.CUSTOM_OPENAI, "https://api.siliconflow.cn/v1"),
-        Candidate("Hugging Face", ProviderType.CUSTOM_OPENAI, "https://router.huggingface.co/v1", listOf("hf_"))
+        Candidate("Hugging Face", ProviderType.CUSTOM_OPENAI, "https://router.huggingface.co/v1", listOf("hf_")),
+        Candidate("Replicate (Video)", ProviderType.REPLICATE, "https://api.replicate.com/v1", listOf("r8_"))
     )
 
     suspend fun detect(apiKey: String): Result<DetectedProvider> {
         val key = apiKey.trim()
         if (key.isBlank()) {
             return Result.failure(Exception("API key is empty."))
+        }
+
+        // fal.ai keys have a distinctive "<uuid>:<hex>" shape — check them
+        // first so another provider's endpoint never gets a false positive.
+        if (MediaProviderProbe.looksLikeFalKey(key)) {
+            val falModels = MediaProviderProbe.falModels(key).getOrNull()
+            if (!falModels.isNullOrEmpty()) {
+                return Result.success(
+                    DetectedProvider(
+                        displayName = "fal.ai (Video)",
+                        type = ProviderType.FAL,
+                        baseUrl = ProviderType.FAL.defaultBaseUrl,
+                        models = falModels,
+                        defaultModel = falModels.first()
+                    )
+                )
+            }
         }
 
         val hinted = candidates.filter { candidate -> candidate.keyHints.any { key.startsWith(it) } }
@@ -100,6 +118,8 @@ object ProviderDetector {
         return when (candidate.type) {
             ProviderType.GEMINI -> GeminiProvider.fetchAvailableModels(apiKey)
             ProviderType.CLAUDE -> ClaudeProvider.fetchAvailableModels(apiKey)
+            ProviderType.REPLICATE -> MediaProviderProbe.replicateModels(apiKey)
+            ProviderType.FAL -> MediaProviderProbe.falModels(apiKey)
             else -> OpenAiCompatibleProvider.fetchAvailableModels(
                 baseUrl = candidate.baseUrl ?: return Result.failure(Exception("No base URL for ${candidate.displayName}")),
                 apiKey = apiKey,

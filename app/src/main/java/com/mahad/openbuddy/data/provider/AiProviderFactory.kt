@@ -12,6 +12,7 @@ class AiProviderFactory(
         return when (config.type) {
             ProviderType.GEMINI -> GeminiProvider(config, apiKey)
             ProviderType.CLAUDE -> ClaudeProvider(config, apiKey)
+            ProviderType.FAL, ProviderType.REPLICATE -> MediaOnlyProvider(config, apiKey)
             ProviderType.KIMI -> OpenAiCompatibleProvider(
                 config = config.copy(
                     baseUrl = config.baseUrl ?: ProviderType.KIMI.defaultBaseUrl
@@ -35,6 +36,7 @@ class AiProviderFactory(
         return when (config.type) {
             ProviderType.GEMINI -> GeminiProvider(config, customKey)
             ProviderType.CLAUDE -> ClaudeProvider(config, customKey)
+            ProviderType.FAL, ProviderType.REPLICATE -> MediaOnlyProvider(config, customKey)
             ProviderType.KIMI -> OpenAiCompatibleProvider(
                 config = config.copy(
                     baseUrl = config.baseUrl ?: ProviderType.KIMI.defaultBaseUrl
