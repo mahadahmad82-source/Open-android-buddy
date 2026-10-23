@@ -80,6 +80,19 @@ enum class ProviderType(
             "minimax/video-01",
             "bytedance/seedance-1-lite"
         )
+    ),
+    POLLINATIONS(
+        displayName = "Pollinations — Video Generation (Wan, Veo, Seedance, Kling)",
+        defaultModel = "alibaba/wan-2.2-fast",
+        defaultBaseUrl = "https://gen.pollinations.ai",
+        recommendedModels = listOf(
+            "alibaba/wan-2.2-fast",
+            "bytedance/seedance-1-pro-fast",
+            "alibaba/wan-2.7",
+            "google/veo-3.1-fast",
+            "kwaivgi/kling-v3.0-std",
+            "bytedance/seedance-2.0-mini"
+        )
     );
 
     companion object {

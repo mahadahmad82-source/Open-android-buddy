@@ -12,7 +12,7 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 /**
- * Support for the media-only provider types (fal.ai, Replicate). These are
+ * Support for the media-only provider types (fal.ai, Replicate, Pollinations). These are
  * not chat APIs: they exist so the agent's generate_video tool has several
  * independent backends. If one is added as the ACTIVE chat provider by
  * mistake, chat replies with a clear explanation instead of a cryptic error.
@@ -35,6 +35,8 @@ class MediaOnlyProvider(
             .map { "Connected to fal.ai — video generation ready (${it.size} video models available)." }
         ProviderType.REPLICATE -> MediaProviderProbe.replicateModels(apiKey)
             .map { "Connected to Replicate — video generation ready (${it.size} video models available)." }
+        ProviderType.POLLINATIONS -> MediaProviderProbe.pollinationsModels(apiKey)
+            .map { "Connected to Pollinations — video generation ready (${it.size} video models available). Note: video models use paid Pollen credits." }
         else -> Result.failure(Exception("Not a media provider."))
     }
 }
@@ -66,6 +68,34 @@ object MediaProviderProbe {
                 when (response.code) {
                     401, 403 -> Result.failure(Exception("fal.ai rejected this key (HTTP ${response.code})."))
                     else -> Result.success(ProviderType.FAL.recommendedModels)
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** Pollinations keys are prefixed: "pk_" (app key) or "sk_" (secret). */
+    fun looksLikePollinationsKey(key: String): Boolean =
+        key.startsWith("pk_") || key.startsWith("sk_")
+
+    /**
+     * Validates a Pollinations key against the authenticated balance
+     * endpoint: an invalid key gets 401, a valid key gets its Pollen
+     * balance. The model list itself is public, so it cannot validate.
+     */
+    suspend fun pollinationsModels(apiKey: String): Result<List<String>> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("https://gen.pollinations.ai/account/balance")
+                .header("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(ProviderType.POLLINATIONS.recommendedModels)
+                } else {
+                    Result.failure(Exception("Pollinations rejected this key (HTTP ${response.code}). Create a key at enter.pollinations.ai."))
                 }
             }
         } catch (e: Exception) {

@@ -154,10 +154,11 @@ class MediaGenerationService(private val context: Context) {
                     ProviderType.GEMINI -> generateVideoVeo(apiKey, prompt)
                     ProviderType.FAL -> generateVideoFal(apiKey, modelOverride ?: config.modelName, prompt)
                     ProviderType.REPLICATE -> generateVideoReplicate(apiKey, modelOverride ?: config.modelName, prompt)
+                    ProviderType.POLLINATIONS -> generateVideoPollinations(apiKey, modelOverride ?: config.modelName, prompt)
                     ProviderType.CUSTOM_OPENAI, ProviderType.KIMI ->
                         generateVideoOpenAiGateway(config, apiKey, prompt, modelOverride)
                     else -> Result.failure(
-                        Exception("${config.name} cannot generate videos. Add a Gemini, fal.ai or Replicate provider for video generation.")
+                        Exception("${config.name} cannot generate videos. Add a Gemini, fal.ai, Replicate or Pollinations provider for video generation.")
                     )
                 }
             } catch (e: Exception) {
@@ -236,6 +237,50 @@ class MediaGenerationService(private val context: Context) {
                 if (bytes == null) Result.failure(Exception("Could not download the generated video."))
                 else Result.success(saveBytes(bytes, "mp4", "video"))
             }
+        }
+    }
+
+    /**
+     * Pollinations (open-source, gen.pollinations.ai): one blocking GET
+     * /video/{prompt} that returns the finished MP4 directly. Query params
+     * pick the model, the length and the orientation; the key goes in the
+     * Authorization header so it never appears in a URL. Every current
+     * video model is paid-only there — generation spends the key's paid
+     * Pollen balance (cheapest: Wan 2.2 Fast at 0.01 Pollen/sec, 480p;
+     * Seedance 1 Pro Fast gives 720p). Generation can take minutes, so
+     * this call uses a long timeout like the gateway backend.
+     */
+    private fun generateVideoPollinations(apiKey: String, modelName: String, prompt: String): Result<File> {
+        val model = modelName.takeIf { it.contains("/") } ?: ProviderType.POLLINATIONS.defaultModel
+        val encodedPrompt = java.net.URLEncoder.encode(prompt, "UTF-8").replace("+", "%20")
+        val url = "https://gen.pollinations.ai/video/$encodedPrompt" +
+            "?model=$model&duration=5&aspectRatio=9:16"
+        val videoClient = client.newBuilder()
+            .callTimeout(12, TimeUnit.MINUTES)
+            .readTimeout(12, TimeUnit.MINUTES)
+            .build()
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $apiKey")
+            .get()
+            .build()
+        return videoClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val body = response.body?.string() ?: ""
+                return Result.failure(
+                    Exception("Pollinations video error (${response.code}): ${errorMessage(body)}")
+                )
+            }
+            val contentType = response.header("Content-Type") ?: ""
+            val bytes = response.body?.bytes()
+                ?: return Result.failure(Exception("Pollinations returned an empty response."))
+            if (!contentType.contains("video", ignoreCase = true) && bytes.size < 10_000) {
+                // A tiny non-video body is an error page/JSON, not a clip.
+                return Result.failure(
+                    Exception("Pollinations did not return a video: ${String(bytes).take(300)}")
+                )
+            }
+            Result.success(saveBytes(bytes, "mp4", "video"))
         }
     }
 

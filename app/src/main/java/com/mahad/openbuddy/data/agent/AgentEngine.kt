@@ -323,7 +323,8 @@ class AgentEngine(
                 // providers, not just the active chat provider, in preference
                 // order (active first). Video backends: Gemini (Veo direct),
                 // fal.ai (Kling/Luma/MiniMax), Replicate (Veo/Kling/
-                // Seedance) and OpenAI-style gateways (a Custom/Kimi provider
+                // Seedance), Pollinations (Wan/Veo/Seedance/Kling via one
+                // API key) and OpenAI-style gateways (a Custom/Kimi provider
                 // such as OmniRoute serves /videos/generations — Veo via
                 // Google Flow, Runway, …) — the tool fails over in order.
                 // Images: Gemini-preferred, media-only types excluded.
@@ -338,6 +339,7 @@ class AgentEngine(
                         it.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI ||
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.FAL ||
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.REPLICATE ||
+                            it.type == com.mahad.openbuddy.domain.model.ProviderType.POLLINATIONS ||
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.CUSTOM_OPENAI ||
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.KIMI
                     }
@@ -346,7 +348,8 @@ class AgentEngine(
                         .filter {
                             it.type != com.mahad.openbuddy.domain.model.ProviderType.CLAUDE &&
                                 it.type != com.mahad.openbuddy.domain.model.ProviderType.FAL &&
-                                it.type != com.mahad.openbuddy.domain.model.ProviderType.REPLICATE
+                                it.type != com.mahad.openbuddy.domain.model.ProviderType.REPLICATE &&
+                                it.type != com.mahad.openbuddy.domain.model.ProviderType.POLLINATIONS
                         }
                         .sortedByDescending { it.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI }
                 }

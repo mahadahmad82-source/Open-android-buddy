@@ -2915,6 +2915,7 @@ private fun ProviderEditorDialog(
                     ProviderType.AUTO_DETECT -> emptyList()
                     ProviderType.FAL -> ProviderType.FAL.recommendedModels
                     ProviderType.REPLICATE -> ProviderType.REPLICATE.recommendedModels
+                    ProviderType.POLLINATIONS -> ProviderType.POLLINATIONS.recommendedModels
                 }
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),

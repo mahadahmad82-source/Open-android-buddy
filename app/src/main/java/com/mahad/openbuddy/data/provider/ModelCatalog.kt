@@ -37,6 +37,7 @@ object ModelCatalog {
         )
         ProviderType.FAL -> ProviderType.FAL.recommendedModels
         ProviderType.REPLICATE -> ProviderType.REPLICATE.recommendedModels
+        ProviderType.POLLINATIONS -> ProviderType.POLLINATIONS.recommendedModels
     }
 
     suspend fun fetchModels(
@@ -58,6 +59,7 @@ object ModelCatalog {
             )
             ProviderType.FAL -> MediaProviderProbe.falModels(apiKey)
             ProviderType.REPLICATE -> MediaProviderProbe.replicateModels(apiKey)
+            ProviderType.POLLINATIONS -> MediaProviderProbe.pollinationsModels(apiKey)
         }
     }
 

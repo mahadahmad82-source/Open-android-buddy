@@ -55,7 +55,8 @@ object ProviderDetector {
         Candidate("Cerebras", ProviderType.CUSTOM_OPENAI, "https://api.cerebras.ai/v1"),
         Candidate("SiliconFlow", ProviderType.CUSTOM_OPENAI, "https://api.siliconflow.cn/v1"),
         Candidate("Hugging Face", ProviderType.CUSTOM_OPENAI, "https://router.huggingface.co/v1", listOf("hf_")),
-        Candidate("Replicate (Video)", ProviderType.REPLICATE, "https://api.replicate.com/v1", listOf("r8_"))
+        Candidate("Replicate (Video)", ProviderType.REPLICATE, "https://api.replicate.com/v1", listOf("r8_")),
+        Candidate("Pollinations (Video)", ProviderType.POLLINATIONS, "https://gen.pollinations.ai", listOf("pk_", "sk_"))
     )
 
     suspend fun detect(apiKey: String): Result<DetectedProvider> {
@@ -76,6 +77,23 @@ object ProviderDetector {
                         baseUrl = ProviderType.FAL.defaultBaseUrl,
                         models = falModels,
                         defaultModel = falModels.first()
+                    )
+                )
+            }
+        }
+
+        // Pollinations keys ("pk_…" / "sk_…") are checked before the sweep:
+        // the "sk_" prefix must never be mistaken for an OpenAI "sk-…" key.
+        if (MediaProviderProbe.looksLikePollinationsKey(key)) {
+            val polModels = MediaProviderProbe.pollinationsModels(key).getOrNull()
+            if (!polModels.isNullOrEmpty()) {
+                return Result.success(
+                    DetectedProvider(
+                        displayName = "Pollinations (Video)",
+                        type = ProviderType.POLLINATIONS,
+                        baseUrl = ProviderType.POLLINATIONS.defaultBaseUrl,
+                        models = polModels,
+                        defaultModel = polModels.first()
                     )
                 )
             }
@@ -119,6 +137,7 @@ object ProviderDetector {
             ProviderType.GEMINI -> GeminiProvider.fetchAvailableModels(apiKey)
             ProviderType.CLAUDE -> ClaudeProvider.fetchAvailableModels(apiKey)
             ProviderType.REPLICATE -> MediaProviderProbe.replicateModels(apiKey)
+            ProviderType.POLLINATIONS -> MediaProviderProbe.pollinationsModels(apiKey)
             ProviderType.FAL -> MediaProviderProbe.falModels(apiKey)
             else -> OpenAiCompatibleProvider.fetchAvailableModels(
                 baseUrl = candidate.baseUrl ?: return Result.failure(Exception("No base URL for ${candidate.displayName}")),
