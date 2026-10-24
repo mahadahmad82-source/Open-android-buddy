@@ -155,10 +155,12 @@ class MediaGenerationService(private val context: Context) {
                     ProviderType.FAL -> generateVideoFal(apiKey, modelOverride ?: config.modelName, prompt)
                     ProviderType.REPLICATE -> generateVideoReplicate(apiKey, modelOverride ?: config.modelName, prompt)
                     ProviderType.POLLINATIONS -> generateVideoPollinations(apiKey, modelOverride ?: config.modelName, prompt)
+                    ProviderType.HF_SPACE -> generateVideoHfSpace(config, apiKey, prompt)
+                    ProviderType.COMFYUI -> generateVideoComfyUi(config, prompt)
                     ProviderType.CUSTOM_OPENAI, ProviderType.KIMI ->
                         generateVideoOpenAiGateway(config, apiKey, prompt, modelOverride)
                     else -> Result.failure(
-                        Exception("${config.name} cannot generate videos. Add a Gemini, fal.ai, Replicate or Pollinations provider for video generation.")
+                        Exception("${config.name} cannot generate videos. Add a Gemini, fal.ai, Replicate, Pollinations, Hugging Face Space or ComfyUI provider for video generation.")
                     )
                 }
             } catch (e: Exception) {
@@ -282,6 +284,246 @@ class MediaGenerationService(private val context: Context) {
             }
             Result.success(saveBytes(bytes, "mp4", "video"))
         }
+    }
+
+
+    /**
+     * Hugging Face Space (Gradio API): the user's own free ZeroGPU Space
+     * running Wan 2.2. POST /gradio_api/call/generate starts the job, the
+     * matching GET streams SSE events until process_completed, whose
+     * payload carries the finished video file. The hf_ key goes in the
+     * Authorization header so the generation spends the KEY OWNER's free
+     * ZeroGPU quota (an anonymous call would have almost no quota).
+     */
+    private fun generateVideoHfSpace(config: AiProviderConfig, apiKey: String, prompt: String): Result<File> {
+        val base = config.baseUrl?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+            ?: return Result.failure(Exception("${config.name} has no Base URL. Set it to your Space address (e.g. https://you-your-space.hf.space)."))
+        val spaceClient = client.newBuilder()
+            .callTimeout(15, TimeUnit.MINUTES)
+            .readTimeout(15, TimeUnit.MINUTES)
+            .build()
+        val joinPayload = JSONObject().apply {
+            put("data", JSONArray().put(prompt))
+        }
+        val joinRequest = Request.Builder()
+            .url("$base/gradio_api/call/generate")
+            .header("Content-Type", "application/json")
+            .apply { if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey") }
+            .post(joinPayload.toString().toRequestBody(jsonMediaType))
+            .build()
+        val eventId = spaceClient.newCall(joinRequest).execute().use { response ->
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return Result.failure(Exception("Hugging Face Space start error (${response.code}): ${errorMessage(body)}"))
+            }
+            JSONObject(body).optString("event_id", "")
+        }
+        if (eventId.isBlank()) {
+            return Result.failure(Exception("Hugging Face Space did not return an event id."))
+        }
+        val streamRequest = Request.Builder()
+            .url("$base/gradio_api/call/generate/$eventId")
+            .apply { if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey") }
+            .get()
+            .build()
+        var videoUrl: String? = null
+        var streamError: String? = null
+        spaceClient.newCall(streamRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                return Result.failure(Exception("Hugging Face Space stream error (${response.code})."))
+            }
+            val source = response.body?.source()
+                ?: return Result.failure(Exception("Hugging Face Space returned an empty stream."))
+            var currentEvent = ""
+            while (true) {
+                val line = source.readUtf8Line() ?: break
+                when {
+                    line.startsWith("event:") -> currentEvent = line.removePrefix("event:").trim()
+                    line.startsWith("data:") -> {
+                        val dataText = line.removePrefix("data:").trim()
+                        if (currentEvent == "error") {
+                            streamError = dataText.take(300)
+                        } else if (currentEvent == "complete" || currentEvent == "process_completed") {
+                            videoUrl = extractGradioVideoUrl(dataText)
+                        }
+                    }
+                }
+                if (videoUrl != null || streamError != null) break
+            }
+        }
+        if (streamError != null) {
+            return Result.failure(Exception("Hugging Face Space generation failed: $streamError"))
+        }
+        val rawUrl = videoUrl
+            ?: return Result.failure(Exception("Hugging Face Space finished without a video (the daily free ZeroGPU quota may be used up)."))
+        val fullUrl = if (rawUrl.startsWith("http")) rawUrl else base + if (rawUrl.startsWith("/")) rawUrl else "/$rawUrl"
+        val downloadBuilder = Request.Builder().url(fullUrl).get()
+        if (apiKey.isNotBlank()) downloadBuilder.header("Authorization", "Bearer $apiKey")
+        return client.newCall(downloadBuilder.build()).execute().use { dl ->
+            if (!dl.isSuccessful) {
+                Result.failure(Exception("Hugging Face Space video download failed: HTTP ${dl.code}"))
+            } else {
+                val bytes = dl.body?.bytes()
+                if (bytes == null) Result.failure(Exception("Could not download the generated video."))
+                else Result.success(saveBytes(bytes, "mp4", "video"))
+            }
+        }
+    }
+
+    /** Gradio results carry the video as a file object ({url/path}) or nested under "video". */
+    private fun extractGradioVideoUrl(dataText: String): String? {
+        return try {
+            val first = JSONArray(dataText).optJSONObject(0) ?: return null
+            first.optJSONObject("video")?.optString("url")?.takeIf { it.isNotBlank() }
+                ?: first.optString("url").takeIf { it.isNotBlank() }
+                ?: first.optString("path").takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * ComfyUI server (the user's own, e.g. on a free Kaggle/Colab GPU):
+     * POST /prompt with the Wan 2.2 workflow, poll /history until the run
+     * completes, then download the clip from /view. ComfyUI has no API
+     * key — the (per-session tunnel) Base URL is the whole credential.
+     */
+    private suspend fun generateVideoComfyUi(config: AiProviderConfig, prompt: String): Result<File> {
+        val base = config.baseUrl?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+            ?: return Result.failure(Exception("${config.name} has no Base URL. Paste the current session's tunnel URL (it changes every session)."))
+        val negative = "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background"
+        fun node(classType: String, inputs: JSONObject) = JSONObject().apply {
+            put("class_type", classType)
+            put("inputs", inputs)
+        }
+        fun ref(id: String, slot: Int = 0) = JSONArray().put(id).put(slot)
+        val workflow = JSONObject().apply {
+            put("1", node("UNETLoader", JSONObject().apply {
+                put("unet_name", "wan2.2_ti2v_5B_fp16.safetensors")
+                put("weight_dtype", "default")
+            }))
+            put("2", node("ModelSamplingSD3", JSONObject().apply {
+                put("model", ref("1"))
+                put("shift", 8.0)
+            }))
+            put("3", node("CLIPLoader", JSONObject().apply {
+                put("clip_name", "umt5_xxl_fp8_e4m3fn_scaled.safetensors")
+                put("type", "wan")
+                put("device", "default")
+            }))
+            put("4", node("CLIPTextEncode", JSONObject().apply {
+                put("text", prompt)
+                put("clip", ref("3"))
+            }))
+            put("5", node("CLIPTextEncode", JSONObject().apply {
+                put("text", negative)
+                put("clip", ref("3"))
+            }))
+            put("6", node("VAELoader", JSONObject().apply {
+                put("vae_name", "wan2.2_vae.safetensors")
+            }))
+            put("7", node("Wan22ImageToVideoLatent", JSONObject().apply {
+                put("vae", ref("6"))
+                put("width", 480)
+                put("height", 832)
+                put("length", 81)
+                put("batch_size", 1)
+            }))
+            put("8", node("KSampler", JSONObject().apply {
+                put("model", ref("2"))
+                put("seed", (100_000..999_999_999).random())
+                put("steps", 20)
+                put("cfg", 5.0)
+                put("sampler_name", "uni_pc")
+                put("scheduler", "simple")
+                put("positive", ref("4"))
+                put("negative", ref("5"))
+                put("latent_image", ref("7"))
+                put("denoise", 1.0)
+            }))
+            put("9", node("VAEDecode", JSONObject().apply {
+                put("samples", ref("8"))
+                put("vae", ref("6"))
+            }))
+            put("10", node("CreateVideo", JSONObject().apply {
+                put("images", ref("9"))
+                put("fps", 16.0)
+            }))
+            put("11", node("SaveVideo", JSONObject().apply {
+                put("video", ref("10"))
+                put("filename_prefix", "openbuddy")
+                put("format", "mp4")
+                put("codec", "h264")
+            }))
+        }
+        val submitPayload = JSONObject().apply {
+            put("prompt", workflow)
+            put("client_id", java.util.UUID.randomUUID().toString())
+        }
+        val submitRequest = Request.Builder()
+            .url("$base/prompt")
+            .header("Content-Type", "application/json")
+            .post(submitPayload.toString().toRequestBody(jsonMediaType))
+            .build()
+        val promptId = client.newCall(submitRequest).execute().use { response ->
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                return Result.failure(Exception("ComfyUI submit error (${response.code}): ${errorMessage(body)}"))
+            }
+            JSONObject(body).optString("prompt_id", "")
+        }
+        if (promptId.isBlank()) {
+            return Result.failure(Exception("ComfyUI did not return a prompt id (the workflow may have been rejected — see the notebook's ComfyUI log)."))
+        }
+        var videoRef: Triple<String, String, String>? = null
+        var polls = 0
+        while (polls < 120 && videoRef == null) {
+            polls++
+            delay(5_000)
+            val historyRequest = Request.Builder().url("$base/history/$promptId").get().build()
+            client.newCall(historyRequest).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val entry = JSONObject(body).optJSONObject(promptId) ?: return@use
+                    val status = entry.optJSONObject("status")
+                    if (status?.optString("status_str") == "error") {
+                        val messages = status.optJSONArray("messages")
+                        var detail = "ComfyUI reported an execution error."
+                        if (messages != null) {
+                            for (i in 0 until messages.length()) {
+                                val m = messages.optJSONArray(i)
+                                if (m != null && m.optString(0) == "execution_error") {
+                                    detail = "ComfyUI error: " + (m.optJSONObject(1)?.optString("exception_message") ?: detail)
+                                    break
+                                }
+                            }
+                        }
+                        return Result.failure(Exception(detail.take(300)))
+                    }
+                    val outputs = entry.optJSONObject("outputs") ?: return@use
+                    val keys = outputs.keys()
+                    while (keys.hasNext()) {
+                        val out = outputs.optJSONObject(keys.next()) ?: continue
+                        val videos = out.optJSONArray("gifs") ?: out.optJSONArray("videos")
+                        val first = videos?.optJSONObject(0)
+                        if (first != null) {
+                            videoRef = Triple(
+                                first.optString("filename", ""),
+                                first.optString("subfolder", ""),
+                                first.optString("type", "output")
+                            )
+                            break
+                        }
+                    }
+                }
+            }
+        }
+        val (filename, subfolder, type) = videoRef
+            ?: return Result.failure(Exception("ComfyUI did not finish the video in time (or the session stopped)."))
+        val viewUrl = "$base/view?filename=" + java.net.URLEncoder.encode(filename, "UTF-8") +
+            "&subfolder=" + java.net.URLEncoder.encode(subfolder, "UTF-8") +
+            "&type=" + java.net.URLEncoder.encode(type, "UTF-8")
+        return downloadVideo(viewUrl, null)
     }
 
     /**

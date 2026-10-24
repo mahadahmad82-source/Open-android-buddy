@@ -2916,6 +2916,8 @@ private fun ProviderEditorDialog(
                     ProviderType.FAL -> ProviderType.FAL.recommendedModels
                     ProviderType.REPLICATE -> ProviderType.REPLICATE.recommendedModels
                     ProviderType.POLLINATIONS -> ProviderType.POLLINATIONS.recommendedModels
+                    ProviderType.HF_SPACE -> ProviderType.HF_SPACE.recommendedModels
+                    ProviderType.COMFYUI -> ProviderType.COMFYUI.recommendedModels
                 }
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2946,7 +2948,7 @@ private fun ProviderEditorDialog(
                 }
 
                 // Base URL Input (Custom OpenAI, Kimi, or optional Auto-detect override)
-                if (selectedType == ProviderType.CUSTOM_OPENAI || selectedType == ProviderType.KIMI || selectedType == ProviderType.AUTO_DETECT) {
+                if (selectedType == ProviderType.CUSTOM_OPENAI || selectedType == ProviderType.KIMI || selectedType == ProviderType.AUTO_DETECT || selectedType == ProviderType.HF_SPACE || selectedType == ProviderType.COMFYUI) {
                     GlassTextField(
                         value = baseUrl,
                         onValueChange = { baseUrl = it },

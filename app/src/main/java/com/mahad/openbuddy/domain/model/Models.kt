@@ -93,6 +93,18 @@ enum class ProviderType(
             "kwaivgi/kling-v3.0-std",
             "bytedance/seedance-2.0-mini"
         )
+    ),
+    HF_SPACE(
+        displayName = "Hugging Face Space — Video Generation (Wan 2.2, Free ZeroGPU)",
+        defaultModel = "wan2.2-ti2v-5b",
+        defaultBaseUrl = null,
+        recommendedModels = listOf("wan2.2-ti2v-5b")
+    ),
+    COMFYUI(
+        displayName = "ComfyUI Server — Video Generation (Wan 2.2, Free GPU)",
+        defaultModel = "wan2.2-ti2v-5b",
+        defaultBaseUrl = null,
+        recommendedModels = listOf("wan2.2-ti2v-5b")
     );
 
     companion object {

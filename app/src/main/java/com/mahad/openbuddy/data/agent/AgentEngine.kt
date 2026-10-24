@@ -340,6 +340,8 @@ class AgentEngine(
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.FAL ||
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.REPLICATE ||
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.POLLINATIONS ||
+                            it.type == com.mahad.openbuddy.domain.model.ProviderType.HF_SPACE ||
+                            it.type == com.mahad.openbuddy.domain.model.ProviderType.COMFYUI ||
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.CUSTOM_OPENAI ||
                             it.type == com.mahad.openbuddy.domain.model.ProviderType.KIMI
                     }
@@ -349,14 +351,21 @@ class AgentEngine(
                             it.type != com.mahad.openbuddy.domain.model.ProviderType.CLAUDE &&
                                 it.type != com.mahad.openbuddy.domain.model.ProviderType.FAL &&
                                 it.type != com.mahad.openbuddy.domain.model.ProviderType.REPLICATE &&
-                                it.type != com.mahad.openbuddy.domain.model.ProviderType.POLLINATIONS
+                                it.type != com.mahad.openbuddy.domain.model.ProviderType.POLLINATIONS &&
+                                it.type != com.mahad.openbuddy.domain.model.ProviderType.HF_SPACE &&
+                                it.type != com.mahad.openbuddy.domain.model.ProviderType.COMFYUI
                         }
                         .sortedByDescending { it.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI }
                 }
                 val pairs = mutableListOf<Pair<com.mahad.openbuddy.domain.model.AiProviderConfig, String>>()
                 for (config in filtered) {
                     val key = secretStore.getApiKey(config.id)
-                    if (!key.isNullOrBlank()) pairs += config to key
+                    if (!key.isNullOrBlank()) {
+                        pairs += config to key
+                    } else if (forVideo && config.type == com.mahad.openbuddy.domain.model.ProviderType.COMFYUI) {
+                        // ComfyUI servers have no API key — the Base URL is the credential.
+                        pairs += config to ""
+                    }
                 }
                 pairs
             }

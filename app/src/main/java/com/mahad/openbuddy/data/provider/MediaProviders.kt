@@ -37,6 +37,10 @@ class MediaOnlyProvider(
             .map { "Connected to Replicate — video generation ready (${it.size} video models available)." }
         ProviderType.POLLINATIONS -> MediaProviderProbe.pollinationsModels(apiKey)
             .map { "Connected to Pollinations — video generation ready (${it.size} video models available). Note: video models use paid Pollen credits." }
+        ProviderType.HF_SPACE -> MediaProviderProbe.hfSpaceModels(config.baseUrl, apiKey)
+            .map { "Connected to your Hugging Face Space — free video generation ready (Wan 2.2 on ZeroGPU)." }
+        ProviderType.COMFYUI -> MediaProviderProbe.comfyUiModels(config.baseUrl)
+            .map { "Connected to your ComfyUI server — free video generation ready (Wan 2.2)." }
         else -> Result.failure(Exception("Not a media provider."))
     }
 }
@@ -96,6 +100,47 @@ object MediaProviderProbe {
                     Result.success(ProviderType.POLLINATIONS.recommendedModels)
                 } else {
                     Result.failure(Exception("Pollinations rejected this key (HTTP ${response.code}). Create a key at enter.pollinations.ai."))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Checks a Hugging Face Space is up by reading its public Gradio API
+     * info. The hf_ token itself is exercised when a generation runs (it
+     * spends the token owner's free ZeroGPU quota).
+     */
+    suspend fun hfSpaceModels(baseUrl: String?, apiKey: String): Result<List<String>> = withContext(Dispatchers.IO) {
+        val base = baseUrl?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+            ?: return@withContext Result.failure(Exception("Set the Base URL to your Space address first (e.g. https://you-your-space.hf.space)."))
+        try {
+            val builder = Request.Builder().url("$base/gradio_api/info").get()
+            if (apiKey.isNotBlank()) builder.header("Authorization", "Bearer $apiKey")
+            client.newCall(builder.build()).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(ProviderType.HF_SPACE.recommendedModels)
+                } else {
+                    Result.failure(Exception("The Space did not answer its API (HTTP ${response.code}). Check the Base URL and that the Space is running."))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** Checks a ComfyUI server via its public system_stats endpoint (no key exists). */
+    suspend fun comfyUiModels(baseUrl: String?): Result<List<String>> = withContext(Dispatchers.IO) {
+        val base = baseUrl?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+            ?: return@withContext Result.failure(Exception("Set the Base URL to your ComfyUI tunnel address first (e.g. https://xxxx.trycloudflare.com)."))
+        try {
+            val request = Request.Builder().url("$base/system_stats").get().build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(ProviderType.COMFYUI.recommendedModels)
+                } else {
+                    Result.failure(Exception("ComfyUI did not answer (HTTP ${response.code}). Check the tunnel URL — it changes every Kaggle/Colab session."))
                 }
             }
         } catch (e: Exception) {

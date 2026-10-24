@@ -274,7 +274,7 @@ class CoreTools(
 
         object : AgentTool {
             override val name = "generate_video"
-            override val description = "Generate a short vertical (9:16) video and show it in the chat. Several backends are available — Google Veo (Gemini key), fal.ai (Kling, Luma, MiniMax), Replicate (Veo, Kling, Seedance), Pollinations (Wan, Veo, Seedance, Kling through one key; spends paid Pollen credits) and OpenAI-style video gateways such as the user's OmniRoute (which can serve Veo through its Google Flow/Antigravity connection, Runway and more via /videos/generations) — and the app tries them in order until one succeeds, using the user's saved providers automatically even if a different provider is active for chat. Optional argument \"backend\": \"veo\", \"fal\", \"replicate\", \"pollinations\" or \"omniroute\" to force one. Optional argument \"model\": a specific video model id for the chosen backend (for OmniRoute e.g. \"googleflow/veo-3.1-fast-generate\"; for Pollinations e.g. \"alibaba/wan-2.2-fast\" or \"google/veo-3.1-fast\"). Takes 1-6 minutes. Arguments: {\"prompt\": \"...\"}. Asks the user to approve first because it is slow and uses paid quota."
+            override val description = "Generate a short vertical (9:16) video and show it in the chat. Several backends are available — Google Veo (Gemini key), fal.ai (Kling, Luma, MiniMax), Replicate (Veo, Kling, Seedance), Pollinations (Wan, Veo, Seedance, Kling through one key; spends paid Pollen credits) and OpenAI-style video gateways such as the user's OmniRoute (which can serve Veo through its Google Flow/Antigravity connection, Runway and more via /videos/generations) — and the app tries them in order until one succeeds, using the user's saved providers automatically even if a different provider is active for chat. Optional argument \"backend\": \"veo\", \"fal\", \"replicate\", \"pollinations\", \"hfspace\" (the user's free Hugging Face ZeroGPU Space running Wan 2.2), \"comfyui\" (the user's own ComfyUI server, e.g. on a free Kaggle GPU, running Wan 2.2) or \"omniroute\" to force one. Optional argument \"model\": a specific video model id for the chosen backend (for OmniRoute e.g. \"googleflow/veo-3.1-fast-generate\"; for Pollinations e.g. \"alibaba/wan-2.2-fast\" or \"google/veo-3.1-fast\"). Takes 1-6 minutes. Arguments: {\"prompt\": \"...\"}. Asks the user to approve first because it is slow and uses paid quota."
             override val requiresApproval = true
             override fun approvalSummary(args: JSONObject) = "Generate video: \"${args.optString("prompt").take(80)}\""
             override suspend fun execute(args: JSONObject): ToolOutcome {
@@ -282,7 +282,7 @@ class CoreTools(
                 if (prompt.isBlank()) return ToolOutcome("A video prompt is required.")
                 var providers = mediaProviders(true)
                 if (providers.isEmpty()) {
-                    return ToolOutcome("No video provider with an API key was found. Tell the user: add a Gemini key (Veo), a fal.ai key, a Replicate token, a Pollinations key, or an OmniRoute/Custom gateway provider in Settings → AI Providers.")
+                    return ToolOutcome("No video provider with an API key was found. Tell the user: add a Gemini key (Veo), a fal.ai key, a Replicate token, a Pollinations key, a Hugging Face Space provider (free), a ComfyUI provider (free), or an OmniRoute/Custom gateway provider in Settings → AI Providers.")
                 }
                 // Optional backend forcing: "veo" / "fal" / "replicate" / "omniroute".
                 val wanted = args.optString("backend").trim().lowercase()
@@ -292,7 +292,9 @@ class CoreTools(
                             "veo", "gemini", "google" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.GEMINI
                             "fal", "fal.ai", "kling", "luma" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.FAL
                             "replicate" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.REPLICATE
-                            "pollinations", "pollination", "wan" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.POLLINATIONS
+                            "pollinations", "pollination" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.POLLINATIONS
+                            "hfspace", "huggingface", "hf", "space", "zerogpu", "wan" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.HF_SPACE
+                            "comfyui", "comfy", "kaggle" -> config.type == com.mahad.openbuddy.domain.model.ProviderType.COMFYUI
                             "omniroute", "gateway", "flow", "googleflow" ->
                                 config.type == com.mahad.openbuddy.domain.model.ProviderType.CUSTOM_OPENAI ||
                                     config.type == com.mahad.openbuddy.domain.model.ProviderType.KIMI
